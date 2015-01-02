@@ -55,7 +55,7 @@ int mysql_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend
   mysql_backend *backend;
   int error;
   MYSQL_BIND bind_buffers[1];
-  MYSQL_BIND result_buffers[1];
+  MYSQL_BIND result_buffers[2];
 
   assert(len_p && type_p && _backend && oid);
 
