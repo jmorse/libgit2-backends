@@ -50,7 +50,7 @@ typedef struct {
   MYSQL_STMT *st_read_header;
 } mysql_backend;
 
-int mysql_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
+static int mysql_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
 {
   mysql_backend *backend;
   int error;
@@ -112,7 +112,7 @@ int mysql_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend
   return error;
 }
 
-int mysql_backend__read(void **data_p, size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
+static int mysql_backend__read(void **data_p, size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
 {
   mysql_backend *backend;
   int error;
@@ -196,7 +196,7 @@ int mysql_backend__read(void **data_p, size_t *len_p, git_otype *type_p, git_odb
   return error;
 }
 
-int mysql_backend__exists(git_odb_backend *_backend, const git_oid *oid)
+static int mysql_backend__exists(git_odb_backend *_backend, const git_oid *oid)
 {
   mysql_backend *backend;
   int found;
@@ -238,7 +238,7 @@ int mysql_backend__exists(git_odb_backend *_backend, const git_oid *oid)
   return found;
 }
 
-int mysql_backend__write(git_oid *oid, git_odb_backend *_backend, const void *data, size_t len, git_otype type)
+static int mysql_backend__write(git_oid *oid, git_odb_backend *_backend, const void *data, size_t len, git_otype type)
 {
   int error;
   mysql_backend *backend;
@@ -298,7 +298,7 @@ int mysql_backend__write(git_oid *oid, git_odb_backend *_backend, const void *da
   return GIT_OK;
 }
 
-void mysql_backend__free(git_odb_backend *_backend)
+static void mysql_backend__free(git_odb_backend *_backend)
 {
   mysql_backend *backend;
   assert(_backend);
