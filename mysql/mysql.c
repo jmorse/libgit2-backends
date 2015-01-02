@@ -27,6 +27,7 @@
 #include <string.h>
 #include <git2.h>
 #include <git2/odb_backend.h>
+#include <git2/errors.h>
 
 /* MySQL C Api docs:
  *   http://dev.mysql.com/doc/refman/5.1/en/c-api-function-overview.html
