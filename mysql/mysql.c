@@ -354,7 +354,7 @@ static int init_db(MYSQL *db)
   num_rows = mysql_num_rows(res);
   if (num_rows == 0) {
     /* the table was not found */
-    error = create_table(db);
+    error = GIT_ENOTFOUND;
   } else if (num_rows > 0) {
     /* the table was found */
     error = GIT_OK;
@@ -416,13 +416,36 @@ static int init_statements(mysql_backend *backend)
   return GIT_OK;
 }
 
-int git_odb_backend_mysql(git_odb_backend **backend_out, const char *mysql_host,
+static MYSQL *connect_to_server(const char *mysql_host, const char *mysql_user,
+        const char *mysql_passwd, const char *mysql_db, unsigned int mysql_port,
+        const char *mysql_unix_socket, unsigned long mysql_client_flag)
+{
+  my_bool reconnect;
+
+  MYSQL *db = mysql_init(NULL);
+
+  reconnect = 1;
+  // allow libmysql to reconnect gracefully
+  if (mysql_options(db, MYSQL_OPT_RECONNECT, &reconnect) != 0)
+    goto cleanup;
+
+  // make the connection
+  if (mysql_real_connect(db, mysql_host, mysql_user, mysql_passwd, mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag) != db)
+    goto cleanup;
+
+  return db;
+
+cleanup:
+  mysql_close(db);
+  return NULL;
+}
+
+int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_host,
         const char *mysql_user, const char *mysql_passwd, const char *mysql_db,
         unsigned int mysql_port, const char *mysql_unix_socket, unsigned long mysql_client_flag)
 {
   mysql_backend *backend;
-  int error;
-  my_bool reconnect;
+  int error = GIT_ERROR;
 
   backend = calloc(1, sizeof(mysql_backend));
   if (backend == NULL) {
@@ -430,18 +453,13 @@ int git_odb_backend_mysql(git_odb_backend **backend_out, const char *mysql_host,
     return GIT_ERROR;
   }
 
-  backend->db = mysql_init(backend->db);
+  backend->db = connect_to_server(mysql_host, mysql_user, mysql_passwd,
+                       mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag);
 
-  reconnect = 1;
-  // allow libmysql to reconnect gracefully
-  if (mysql_options(backend->db, MYSQL_OPT_RECONNECT, &reconnect) != 0)
+  if (!backend->db)
     goto cleanup;
 
-  // make the connection
-  if (mysql_real_connect(backend->db, mysql_host, mysql_user, mysql_passwd, mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag) != backend->db)
-    goto cleanup;
-
-  // check for and possibly create the database
+  // check for existence of db
   error = init_db(backend->db);
   if (error < 0)
     goto cleanup;
@@ -461,5 +479,27 @@ int git_odb_backend_mysql(git_odb_backend **backend_out, const char *mysql_host,
 
 cleanup:
   mysql_backend__free((git_odb_backend *)backend);
-  return GIT_ERROR;
+  return error;
+}
+
+int git_odb_backend_mysql_create(const char *mysql_host, const char *mysql_user,
+        const char *mysql_passwd, const char *mysql_db, unsigned int mysql_port,
+        const char *mysql_unix_socket, unsigned long mysql_client_flag)
+{
+  MYSQL *db;
+  int error = GIT_ERROR;
+
+  db = connect_to_server(mysql_host, mysql_user, mysql_passwd,
+               mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag);
+
+  if (!db)
+    goto cleanup;
+
+  error = create_table(db);
+
+cleanup:
+  if (db)
+    mysql_close(db);
+
+  return error;
 }
