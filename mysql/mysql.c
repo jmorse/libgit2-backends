@@ -503,3 +503,12 @@ cleanup:
 
   return error;
 }
+
+void git_odb_backend_mysql_free(git_odb_backend *backend)
+{
+  /* Function for disposing of an unwanted backend -- necessary if for some
+   * reason it can't be loaded into a git_repository. There's no other
+   * publically published way to get rid of it. */
+  mysql_odb_backend__free(backend);
+  return;
+}
