@@ -468,6 +468,8 @@ int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_
   if (error < 0)
     goto cleanup;
 
+  backend->parent.version = GIT_ODB_BACKEND_VERSION;
+  backend->parent.odb = NULL;
   backend->parent.read = &mysql_odb_backend__read;
   backend->parent.read_header = &mysql_odb_backend__read_header;
   backend->parent.write = &mysql_odb_backend__write;
