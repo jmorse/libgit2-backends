@@ -39,8 +39,8 @@
  */
 #include <mysql.h>
 
-#define GIT2_TABLE_NAME "git2_odb"
-#define GIT2_STORAGE_ENGINE "InnoDB"
+#define GIT2_ODB_TABLE_NAME "git2_odb"
+#define GIT2_ODB_STORAGE_ENGINE "InnoDB"
 
 typedef struct {
   git_odb_backend parent;
@@ -319,7 +319,7 @@ static void mysql_odb_backend__free(git_odb_backend *_backend)
 static int create_table(MYSQL *db)
 {
   static const char *sql_create =
-    "CREATE TABLE `" GIT2_TABLE_NAME "` ("
+    "CREATE TABLE `" GIT2_ODB_TABLE_NAME "` ("
     "  `oid` binary(20) NOT NULL DEFAULT '',"
     "  `type` tinyint(1) unsigned NOT NULL,"
     "  `size` bigint(20) unsigned NOT NULL,"
@@ -327,7 +327,7 @@ static int create_table(MYSQL *db)
     "  PRIMARY KEY (`oid`),"
     "  KEY `type` (`type`),"
     "  KEY `size` (`size`)"
-    ") ENGINE=" GIT2_STORAGE_ENGINE " DEFAULT CHARSET=utf8 COLLATE=utf8_bin;";
+    ") ENGINE=" GIT2_ODB_STORAGE_ENGINE " DEFAULT CHARSET=utf8 COLLATE=utf8_bin;";
 
   if (mysql_real_query(db, sql_create, strlen(sql_create)) != 0)
     return GIT_ERROR;
@@ -338,7 +338,7 @@ static int create_table(MYSQL *db)
 static int init_db(MYSQL *db)
 {
   static const char *sql_check =
-    "SHOW TABLES LIKE '" GIT2_TABLE_NAME "';";
+    "SHOW TABLES LIKE '" GIT2_ODB_TABLE_NAME "';";
 
   MYSQL_RES *res;
   int error;
@@ -371,13 +371,13 @@ static int init_statements(mysql_odb_backend *backend)
   my_bool truth = 1;
 
   static const char *sql_read =
-    "SELECT `type`, `size`, UNCOMPRESS(`data`) FROM `" GIT2_TABLE_NAME "` WHERE `oid` = ?;";
+    "SELECT `type`, `size`, UNCOMPRESS(`data`) FROM `" GIT2_ODB_TABLE_NAME "` WHERE `oid` = ?;";
 
   static const char *sql_read_header =
-    "SELECT `type`, `size` FROM `" GIT2_TABLE_NAME "` WHERE `oid` = ?;";
+    "SELECT `type`, `size` FROM `" GIT2_ODB_TABLE_NAME "` WHERE `oid` = ?;";
 
   static const char *sql_write =
-    "INSERT IGNORE INTO `" GIT2_TABLE_NAME "` VALUES (?, ?, ?, COMPRESS(?));";
+    "INSERT IGNORE INTO `" GIT2_ODB_TABLE_NAME "` VALUES (?, ?, ?, COMPRESS(?));";
 
 
   backend->st_read = mysql_stmt_init(backend->db);
