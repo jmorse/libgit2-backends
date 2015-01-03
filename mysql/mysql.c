@@ -48,6 +48,7 @@ typedef struct {
   MYSQL_STMT *st_read;
   MYSQL_STMT *st_write;
   MYSQL_STMT *st_read_header;
+  MYSQL_STMT *st_read_prefix;
 } mysql_odb_backend;
 
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
@@ -108,6 +109,87 @@ static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_
   // reset the statement for further use
   if (mysql_stmt_reset(backend->st_read_header) != 0)
     return 0;
+
+  return error;
+}
+
+static int mysql_odb_backend__read_prefix(git_oid *output_oid, void **out_buf,
+        size_t *out_len, git_otype *out_type, git_odb_backend *_backend,
+        const git_oid *partial_oid, size_t oidlen)
+{
+  MYSQL_BIND result_buffers[3];
+  MYSQL_BIND bind_buffers[1];
+  mysql_odb_backend *backend;
+  unsigned long data_len;
+  int error = GIT_ERROR;
+
+  assert(output_oid && out_buf && out_len && out_type && backend && partial_oid
+          && oidlen != 0);
+
+  backend = (mysql_odb_backend *)_backend;
+
+  memset(result_buffers, 0, sizeof(result_buffers));
+  memset(bind_buffers, 0, sizeof(bind_buffers));
+
+  // Bind the partial oid into the statement
+  bind_buffers[0].buffer = (void*)partial_oid->id;
+  bind_buffers[0].buffer_length = oidlen;
+  bind_buffers[0].length = &bind_buffers[0].buffer_length;
+  bind_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
+  if (mysql_stmt_bind_param(backend->st_read_prefix, bind_buffers) != 0)
+    return error;
+
+  // execute the statement
+  if (mysql_stmt_execute(backend->st_read_prefix) != 0)
+    return error;
+
+  if (mysql_stmt_store_result(backend->st_read_prefix) != 0)
+    return error;
+
+  // This could be 0, 1, or many: it's a prefix search.
+  if (mysql_stmt_num_rows(backend->st_read_prefix) == 0) {
+    error = GIT_ENOTFOUND;
+  } else if (mysql_stmt_num_rows(backend->st_read_prefix) > 1) {
+    error = GIT_EAMBIGUOUS;
+  } else {
+    assert(mysql_stmt_num_rows(backend->st_read_prefix) == 1);
+
+    result_buffers[0].buffer_type = MYSQL_TYPE_TINY;
+    result_buffers[0].buffer = &out_type;
+    result_buffers[0].buffer_length = sizeof(*out_type);
+    memset(out_type, 0, sizeof(*out_type));
+
+    result_buffers[1].buffer_type = MYSQL_TYPE_LONGLONG;
+    result_buffers[1].buffer = out_len;
+    result_buffers[1].buffer_length = sizeof(out_len);
+    memset(out_len, 0, sizeof(*out_len));
+
+    result_buffers[2].buffer_type = MYSQL_TYPE_LONG_BLOB;
+    result_buffers[2].buffer = 0;
+    result_buffers[2].buffer_length = 0;
+    result_buffers[2].length = &data_len;
+
+    if(mysql_stmt_bind_result(backend->st_read_prefix, result_buffers) != 0)
+      return GIT_ERROR;
+
+    // Fetch row, binding output data values, except data column
+    error = mysql_stmt_fetch(backend->st_read_prefix);
+
+    if (data_len > 0) {
+      *out_buf = malloc(data_len);
+      result_buffers[2].buffer = *out_buf;
+      result_buffers[2].buffer_length = data_len;
+
+      if (mysql_stmt_fetch_column(backend->st_read_prefix, &result_buffers[2], 2, 0) != 0)
+        return GIT_ERROR;
+    }
+
+    error = GIT_OK;
+  }
+
+  // reset the statement for further use
+  if (mysql_stmt_reset(backend->st_read_prefix) != 0)
+    return GIT_ERROR;
 
   return error;
 }
@@ -310,6 +392,8 @@ static void mysql_odb_backend__free(git_odb_backend *_backend)
     mysql_stmt_close(backend->st_read_header);
   if (backend->st_write)
     mysql_stmt_close(backend->st_write);
+  if (backend->st_read_prefix)
+    mysql_stmt_close(backend->st_read_prefix);
 
   mysql_close(backend->db);
 
@@ -376,9 +460,11 @@ static int init_statements(mysql_odb_backend *backend)
   static const char *sql_read_header =
     "SELECT `type`, `size` FROM `" GIT2_ODB_TABLE_NAME "` WHERE `oid` = ?;";
 
+  static const char *sql_read_prefix =
+    "SELECT `type`, `size`, UNCOMPRESS(`data`) FROM `" GIT2_ODB_TABLE_NAME "` WHERE oid LIKE CONCAT(?, '%');";
+
   static const char *sql_write =
     "INSERT IGNORE INTO `" GIT2_ODB_TABLE_NAME "` VALUES (?, ?, ?, COMPRESS(?));";
-
 
   backend->st_read = mysql_stmt_init(backend->db);
   if (backend->st_read == NULL)
@@ -399,6 +485,17 @@ static int init_statements(mysql_odb_backend *backend)
     return GIT_ERROR;
 
   if (mysql_stmt_prepare(backend->st_read_header, sql_read_header, strlen(sql_read)) != 0)
+    return GIT_ERROR;
+
+
+  backend->st_read_prefix = mysql_stmt_init(backend->db);
+  if (backend->st_read_prefix == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_read_prefix, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_read_prefix, sql_read_prefix, strlen(sql_read_prefix)) != 0)
     return GIT_ERROR;
 
 
@@ -472,6 +569,7 @@ int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_
   backend->parent.odb = NULL;
   backend->parent.read = &mysql_odb_backend__read;
   backend->parent.read_header = &mysql_odb_backend__read_header;
+  backend->parent.read_prefix = &mysql_odb_backend__read_prefix;
   backend->parent.write = &mysql_odb_backend__write;
   backend->parent.exists = &mysql_odb_backend__exists;
   backend->parent.free = &mysql_odb_backend__free;
