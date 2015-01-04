@@ -560,44 +560,44 @@ int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_
         const char *mysql_user, const char *mysql_passwd, const char *mysql_db,
         unsigned int mysql_port, const char *mysql_unix_socket, unsigned long mysql_client_flag)
 {
-  mysql_odb_backend *backend;
+  mysql_odb_backend *odb_backend;
   int error = GIT_ERROR;
 
-  backend = calloc(1, sizeof(mysql_odb_backend));
-  if (backend == NULL) {
+  odb_backend = calloc(1, sizeof(mysql_odb_backend));
+  if (odb_backend == NULL) {
     giterr_set_oom();
     return GIT_ERROR;
   }
 
-  backend->db = connect_to_server(mysql_host, mysql_user, mysql_passwd,
+  odb_backend->db = connect_to_server(mysql_host, mysql_user, mysql_passwd,
                        mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag);
 
-  if (!backend->db)
+  if (!odb_backend->db)
     goto cleanup;
 
   // check for existence of db
-  error = init_db(backend->db);
+  error = init_db(odb_backend->db);
   if (error < 0)
     goto cleanup;
 
-  error = init_statements(backend);
+  error = init_statements(odb_backend);
   if (error < 0)
     goto cleanup;
 
-  backend->parent.version = GIT_ODB_BACKEND_VERSION;
-  backend->parent.odb = NULL;
-  backend->parent.read = &mysql_odb_backend__read;
-  backend->parent.read_header = &mysql_odb_backend__read_header;
-  backend->parent.read_prefix = &mysql_odb_backend__read_prefix;
-  backend->parent.write = &mysql_odb_backend__write;
-  backend->parent.exists = &mysql_odb_backend__exists;
-  backend->parent.free = &mysql_odb_backend__free;
+  odb_backend->parent.version = GIT_ODB_BACKEND_VERSION;
+  odb_backend->parent.odb = NULL;
+  odb_backend->parent.read = &mysql_odb_backend__read;
+  odb_backend->parent.read_header = &mysql_odb_backend__read_header;
+  odb_backend->parent.read_prefix = &mysql_odb_backend__read_prefix;
+  odb_backend->parent.write = &mysql_odb_backend__write;
+  odb_backend->parent.exists = &mysql_odb_backend__exists;
+  odb_backend->parent.free = &mysql_odb_backend__free;
 
-  *backend_out = (git_odb_backend *)backend;
+  *backend_out = (git_odb_backend *)odb_backend;
   return GIT_OK;
 
 cleanup:
-  mysql_odb_backend__free((git_odb_backend *)backend);
+  mysql_odb_backend__free((git_odb_backend *)odb_backend);
   return error;
 }
 
