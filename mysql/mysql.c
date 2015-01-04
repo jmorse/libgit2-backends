@@ -419,6 +419,41 @@ static void mysql_odb_backend__free(git_odb_backend *_backend)
   free(backend);
 }
 
+static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *backend,
+         const char *ref_name)
+{
+  abort();
+}
+
+static int mysql_refdb_backend__lookup(git_reference **out,
+        git_refdb_backend *backend, const char *ref_name)
+{
+  abort();
+}
+
+static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
+        struct git_refdb_backend *backend, const char *glob)
+{
+  abort();
+}
+
+static int mysql_refdb_backend__write(git_refdb_backend *backend,
+        const git_reference *ref, int force)
+{
+  abort();
+}
+
+static int mysql_refdb_backend__delete(git_refdb_backend *backend,
+        const char *ref_name)
+{
+  abort();
+}
+
+static void mysql_refdb_backend__free(git_refdb_backend *backend)
+{
+  abort();
+}
+
 static int create_table(MYSQL *db)
 {
   static const char *sql_create =
@@ -556,11 +591,13 @@ cleanup:
   return NULL;
 }
 
-int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_host,
+int git_odb_backend_mysql_open(git_odb_backend **odb_out, git_refdb_backend **refdb_out,
+        const char *mysql_host,
         const char *mysql_user, const char *mysql_passwd, const char *mysql_db,
         unsigned int mysql_port, const char *mysql_unix_socket, unsigned long mysql_client_flag)
 {
   mysql_odb_backend *odb_backend;
+  mysql_refdb_backend *refdb_backend;
   int error = GIT_ERROR;
 
   odb_backend = calloc(1, sizeof(mysql_odb_backend));
@@ -569,10 +606,21 @@ int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_
     return GIT_ERROR;
   }
 
+  refdb_backend = calloc(1, sizeof(mysql_refdb_backend));
+  if (refdb_backend == NULL) {
+    giterr_set_oom();
+    return GIT_ERROR;
+  }
+
+  /* Create two connections, one for odb access, the other for refdb. This
+   * simplifies situations where, perhaps, a refdb_backend is freed but the
+   * odb_backend continues elsewhere. */
   odb_backend->db = connect_to_server(mysql_host, mysql_user, mysql_passwd,
                        mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag);
+  refdb_backend->db = connect_to_server(mysql_host, mysql_user, mysql_passwd,
+                       mysql_db, mysql_port, mysql_unix_socket, mysql_client_flag);
 
-  if (!odb_backend->db)
+  if (!odb_backend->db || !refdb_backend->db)
     goto cleanup;
 
   // check for existence of db
@@ -593,11 +641,21 @@ int git_odb_backend_mysql_open(git_odb_backend **backend_out, const char *mysql_
   odb_backend->parent.exists = &mysql_odb_backend__exists;
   odb_backend->parent.free = &mysql_odb_backend__free;
 
-  *backend_out = (git_odb_backend *)odb_backend;
+  refdb_backend->parent.version = GIT_ODB_BACKEND_VERSION ;
+  refdb_backend->parent.exists = &mysql_refdb_backend__exists;
+  refdb_backend->parent.lookup = &mysql_refdb_backend__lookup;
+  refdb_backend->parent.iterator = &mysql_refdb_backend__iterator;
+  refdb_backend->parent.write = &mysql_refdb_backend__write;
+  refdb_backend->parent.delete = &mysql_refdb_backend__delete;
+  refdb_backend->parent.free = &mysql_refdb_backend__free;
+
+  *odb_out = (git_odb_backend *)odb_backend;
+  *refdb_out = &refdb_backend->parent;
   return GIT_OK;
 
 cleanup:
   mysql_odb_backend__free((git_odb_backend *)odb_backend);
+  mysql_refdb_backend__free(&refdb_backend->parent);
   return error;
 }
 
