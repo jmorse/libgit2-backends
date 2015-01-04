@@ -28,6 +28,7 @@
 #include <git2.h>
 #include <git2/odb_backend.h>
 #include <git2/sys/odb_backend.h>
+#include <git2/sys/refdb_backend.h>
 #include <git2/errors.h>
 #include <git2/types.h>
 
@@ -41,6 +42,8 @@
 
 #define GIT2_ODB_TABLE_NAME "git2_odb"
 #define GIT2_ODB_STORAGE_ENGINE "InnoDB"
+#define GIT2_REFDB_TABLE_NAME "git2_refdb"
+#define GIT2_REFDB_STORAGE_ENGINE "InnoDB"
 
 typedef struct {
   git_odb_backend parent;
@@ -50,6 +53,16 @@ typedef struct {
   MYSQL_STMT *st_read_header;
   MYSQL_STMT *st_read_prefix;
 } mysql_odb_backend;
+
+typedef struct {
+  git_refdb_backend parent;
+  MYSQL *db;
+  MYSQL_STMT *st_exists;
+  MYSQL_STMT *st_lookup;
+  MYSQL_STMT *st_iterate;
+  MYSQL_STMT *st_write;
+  MYSQL_STMT *st_delete;
+} mysql_refdb_backend;
 
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
 {
