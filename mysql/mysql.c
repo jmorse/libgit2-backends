@@ -456,7 +456,7 @@ static void mysql_refdb_backend__free(git_refdb_backend *backend)
 
 static int create_table(MYSQL *db)
 {
-  static const char *sql_create =
+  static const char *sql_create_odb =
     "CREATE TABLE `" GIT2_ODB_TABLE_NAME "` ("
     "  `oid` binary(20) NOT NULL DEFAULT '',"
     "  `type` tinyint(1) unsigned NOT NULL,"
@@ -466,8 +466,17 @@ static int create_table(MYSQL *db)
     "  KEY `type` (`type`),"
     "  KEY `size` (`size`)"
     ") ENGINE=" GIT2_ODB_STORAGE_ENGINE " DEFAULT CHARSET=utf8 COLLATE=utf8_bin;";
+  static const char *sql_create_refdb =
+    "CREATE TABLE `" GIT2_REFDB_TABLE_NAME "` ("
+    "  `refname` text COLLATE utf8_bin NOT NULL, "
+    "  `oid` binary(20) NOT NULL, "
+    "  KEY `name` (`refname`(32)) "
+    ") ENGINE=" GIT2_REFDB_STORAGE_ENGINE " DEFAULT CHARSET=utf8 COLLATE=utf8_bin;";
 
-  if (mysql_real_query(db, sql_create, strlen(sql_create)) != 0)
+  if (mysql_real_query(db, sql_create_odb, strlen(sql_create_odb)) != 0)
+    return GIT_ERROR;
+
+  if (mysql_real_query(db, sql_create_refdb, strlen(sql_create_refdb)) != 0)
     return GIT_ERROR;
 
   return GIT_OK;
