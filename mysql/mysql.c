@@ -131,6 +131,12 @@ static int mysql_odb_backend__read_prefix(git_oid *output_oid, void **out_buf,
   memset(result_buffers, 0, sizeof(result_buffers));
   memset(bind_buffers, 0, sizeof(bind_buffers));
 
+  // Incoming OID length is specified in _hex_ digits, not bytes. Decrease to
+  // bytes for mysql. XXX this shows up one problem, which is that we can't
+  // search prefixes by anything less than a byte, and extra nibbles will be
+  // truncated. This is not easily fixed.
+  oidlen /= 2;
+
   // Bind the partial oid into the statement
   bind_buffers[0].buffer = (void*)partial_oid->id;
   bind_buffers[0].buffer_length = oidlen;
