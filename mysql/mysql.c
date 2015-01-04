@@ -26,9 +26,12 @@
 #include <assert.h>
 #include <string.h>
 #include <git2.h>
+#include <git2/oid.h>
 #include <git2/odb_backend.h>
+#include <git2/refs.h>
 #include <git2/sys/odb_backend.h>
 #include <git2/sys/refdb_backend.h>
+#include <git2/sys/refs.h>
 #include <git2/errors.h>
 #include <git2/types.h>
 
@@ -426,9 +429,75 @@ static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *backend,
 }
 
 static int mysql_refdb_backend__lookup(git_reference **out,
-        git_refdb_backend *backend, const char *ref_name)
+        git_refdb_backend *_backend, const char *ref_name)
 {
-  abort();
+  mysql_refdb_backend *backend;
+  int error;
+  MYSQL_BIND bind_buffers[1];
+  MYSQL_BIND result_buffers[2];
+
+  assert(out && backend && ref_name && oid);
+
+  backend = (mysql_refdb_backend *)_backend;
+  error = GIT_ERROR;
+
+  memset(bind_buffers, 0, sizeof(bind_buffers));
+  memset(result_buffers, 0, sizeof(result_buffers));
+
+  // bind the oid passed to the statement
+  bind_buffers[0].buffer = (void*)ref_name;
+  bind_buffers[0].buffer_length = strlen(ref_name);
+  bind_buffers[0].length = &bind_buffers[0].buffer_length;
+  bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
+  if (mysql_stmt_bind_param(backend->st_lookup, bind_buffers) != 0)
+    return 0;
+
+  // execute the statement
+  if (mysql_stmt_execute(backend->st_lookup) != 0)
+    return 0;
+
+  if (mysql_stmt_store_result(backend->st_lookup) != 0)
+    return 0;
+
+  if (mysql_stmt_num_rows(backend->st_lookup) == 0) {
+    error = GIT_ENOTFOUND;
+  } else if (mysql_stmt_num_rows(backend->st_lookup) != 1) {
+    /* Duplicate refname has occurred. Everything is broken. */
+    error = GIT_ERROR;
+  } else {
+    unsigned char odb_buffer[GIT_OID_RAWSZ];
+    git_oid oid;
+
+    assert(mysql_stmt_num_rows(backend->st_lookup) == 1);
+
+    result_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
+    result_buffers[0].buffer = odb_buffer;
+    result_buffers[0].buffer_length = sizeof(odb_buffer);
+    result_buffers[0].length = &result_buffers[0].buffer_length;
+    memset(odb_buffer, 0, sizeof(odb_buffer));
+
+    if(mysql_stmt_bind_result(backend->st_lookup, result_buffers) != 0)
+      return GIT_ERROR;
+
+    if(mysql_stmt_fetch(backend->st_lookup) != 0)
+      return GIT_ERROR;
+
+    /* Having read the relevant oid, create an oid, then a reference */
+    git_oid_fromraw(&oid, odb_buffer);
+
+    *out = git_reference__alloc(ref_name, &oid, NULL);
+
+    if (*out == NULL)
+      error = GIT_ERROR;
+    else
+      error = GIT_OK;
+  }
+
+  // reset the statement for further use
+  if (mysql_stmt_reset(backend->st_lookup) != 0)
+    return 0;
+
+  return error;
 }
 
 static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
