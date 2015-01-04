@@ -490,7 +490,7 @@ static int init_statements(mysql_odb_backend *backend)
   if (mysql_stmt_attr_set(backend->st_read_header, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
     return GIT_ERROR;
 
-  if (mysql_stmt_prepare(backend->st_read_header, sql_read_header, strlen(sql_read)) != 0)
+  if (mysql_stmt_prepare(backend->st_read_header, sql_read_header, strlen(sql_read_header)) != 0)
     return GIT_ERROR;
 
 
@@ -512,7 +512,7 @@ static int init_statements(mysql_odb_backend *backend)
   if (mysql_stmt_attr_set(backend->st_write, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
     return GIT_ERROR;
 
-  if (mysql_stmt_prepare(backend->st_write, sql_write, strlen(sql_read)) != 0)
+  if (mysql_stmt_prepare(backend->st_write, sql_write, strlen(sql_write)) != 0)
     return GIT_ERROR;
 
 
