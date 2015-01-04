@@ -473,16 +473,13 @@ static int create_table(MYSQL *db)
   return GIT_OK;
 }
 
-static int init_db(MYSQL *db)
+static int check_table_present(MYSQL *db, const char *query)
 {
-  static const char *sql_check =
-    "SHOW TABLES LIKE '" GIT2_ODB_TABLE_NAME "';";
-
   MYSQL_RES *res;
   int error;
   my_ulonglong num_rows;
 
-  if (mysql_real_query(db, sql_check, strlen(sql_check)) != 0)
+  if (mysql_real_query(db, query, strlen(query)) != 0)
     return GIT_ERROR;
 
   res = mysql_store_result(db);
@@ -501,6 +498,22 @@ static int init_db(MYSQL *db)
   }
 
   mysql_free_result(res);
+  return error;
+}
+
+static int check_db_present(MYSQL *db)
+{
+  static const char *sql_check_odb =
+    "SHOW TABLES LIKE '" GIT2_ODB_TABLE_NAME "';";
+  static const char *sql_check_refdb =
+    "SHOW TABLES LIKE '" GIT2_REFDB_TABLE_NAME "';";
+  int error;
+
+  error = check_table_present(db, sql_check_odb);
+  if (error != GIT_OK)
+    return error;
+
+  error = check_table_present(db, sql_check_refdb);
   return error;
 }
 
@@ -624,7 +637,7 @@ int git_odb_backend_mysql_open(git_odb_backend **odb_out, git_refdb_backend **re
     goto cleanup;
 
   // check for existence of db
-  error = init_db(odb_backend->db);
+  error = check_db_present(odb_backend->db);
   if (error < 0)
     goto cleanup;
 
