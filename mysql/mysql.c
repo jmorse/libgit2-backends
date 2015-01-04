@@ -791,3 +791,10 @@ void git_odb_backend_mysql_free(git_odb_backend *backend)
   mysql_odb_backend__free(backend);
   return;
 }
+
+void git_refdb_backend_mysql_free(git_refdb_backend *backend)
+{
+  /* Same as odb...free, but for refdb */
+  mysql_refdb_backend__free(backend);
+  return;
+}
