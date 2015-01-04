@@ -526,7 +526,7 @@ static int check_db_present(MYSQL *db)
   return error;
 }
 
-static int init_statements(mysql_odb_backend *backend)
+static int init_odb_statements(mysql_odb_backend *backend)
 {
   my_bool truth = 1;
 
@@ -585,6 +585,82 @@ static int init_statements(mysql_odb_backend *backend)
   if (mysql_stmt_prepare(backend->st_write, sql_write, strlen(sql_write)) != 0)
     return GIT_ERROR;
 
+
+  return GIT_OK;
+}
+
+static int init_refdb_statements(mysql_refdb_backend *backend)
+{
+  my_bool truth = 1;
+
+  static const char *sql_exists =
+    "SELECT `refname` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
+
+  static const char *sql_lookup =
+    "SELECT `oid` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
+
+  static const char *sql_iterate =
+    "SELECT `refname`, `oid` FROM `" GIT2_REFDB_TABLE_NAME "`;";
+
+  static const char *sql_write =
+    "INSERT INTO `" GIT2_REFDB_TABLE_NAME "` VALUES (?, ?);";
+
+  static const char *sql_delete =
+    "DELETE FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
+
+  backend->st_exists = mysql_stmt_init(backend->db);
+  if (backend->st_exists == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_exists, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_exists, sql_exists, strlen(sql_exists)) != 0)
+    return GIT_ERROR;
+
+
+  backend->st_lookup = mysql_stmt_init(backend->db);
+  if (backend->st_lookup == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_lookup, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_lookup, sql_lookup, strlen(sql_lookup)) != 0)
+    return GIT_ERROR;
+
+
+  backend->st_iterate = mysql_stmt_init(backend->db);
+  if (backend->st_iterate == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_iterate, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_iterate, sql_iterate, strlen(sql_iterate)) != 0)
+    return GIT_ERROR;
+
+
+  backend->st_write = mysql_stmt_init(backend->db);
+  if (backend->st_write == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_write, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_write, sql_write, strlen(sql_write)) != 0)
+    return GIT_ERROR;
+
+
+  backend->st_delete = mysql_stmt_init(backend->db);
+  if (backend->st_delete == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_delete, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_delete, sql_delete, strlen(sql_delete)) != 0)
+    return GIT_ERROR;
 
   return GIT_OK;
 }
@@ -650,7 +726,11 @@ int git_odb_backend_mysql_open(git_odb_backend **odb_out, git_refdb_backend **re
   if (error < 0)
     goto cleanup;
 
-  error = init_statements(odb_backend);
+  error = init_odb_statements(odb_backend);
+  if (error < 0)
+    goto cleanup;
+
+  error = init_refdb_statements(refdb_backend);
   if (error < 0)
     goto cleanup;
 
