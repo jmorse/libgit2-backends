@@ -430,7 +430,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
   MYSQL_BIND bind_buffers[1];
   MYSQL_BIND result_buffers[2];
 
-  assert(out && backend && ref_name && oid);
+  assert(out && _backend && ref_name && oid);
 
   backend = (mysql_refdb_backend *)_backend;
   error = GIT_ERROR;
