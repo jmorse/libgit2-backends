@@ -422,12 +422,6 @@ static void mysql_odb_backend__free(git_odb_backend *_backend)
   free(backend);
 }
 
-static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *backend,
-         const char *ref_name)
-{
-  abort();
-}
-
 static int mysql_refdb_backend__lookup(git_reference **out,
         git_refdb_backend *_backend, const char *ref_name)
 {
@@ -498,6 +492,25 @@ static int mysql_refdb_backend__lookup(git_reference **out,
     return 0;
 
   return error;
+}
+
+static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *_backend,
+         const char *ref_name)
+{
+  git_reference *ref = NULL;
+  int error;
+
+  error = mysql_refdb_backend__lookup(&ref, _backend, ref_name);
+
+  if (error == GIT_ENOTFOUND)
+    *exists = 0;
+  else if (error != GIT_OK)
+    return error;
+
+  /* Otherwise, the reference was found */
+  git_reference_free(ref);
+  *exists = 1;
+  return GIT_OK;
 }
 
 static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
