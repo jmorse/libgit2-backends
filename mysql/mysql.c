@@ -60,7 +60,6 @@ typedef struct {
 typedef struct {
   git_refdb_backend parent;
   MYSQL *db;
-  MYSQL_STMT *st_exists;
   MYSQL_STMT *st_lookup;
   MYSQL_STMT *st_iterate;
   MYSQL_STMT *st_write;
@@ -804,9 +803,6 @@ static int init_refdb_statements(mysql_refdb_backend *backend)
 {
   my_bool truth = 1;
 
-  static const char *sql_exists =
-    "SELECT `refname` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
-
   static const char *sql_lookup =
     "SELECT `oid` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
 
@@ -818,16 +814,6 @@ static int init_refdb_statements(mysql_refdb_backend *backend)
 
   static const char *sql_delete =
     "DELETE FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
-
-  backend->st_exists = mysql_stmt_init(backend->db);
-  if (backend->st_exists == NULL)
-    return GIT_ERROR;
-
-  if (mysql_stmt_attr_set(backend->st_exists, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
-    return GIT_ERROR;
-
-  if (mysql_stmt_prepare(backend->st_exists, sql_exists, strlen(sql_exists)) != 0)
-    return GIT_ERROR;
 
 
   backend->st_lookup = mysql_stmt_init(backend->db);
