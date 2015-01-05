@@ -502,10 +502,12 @@ static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *_backend,
 
   error = mysql_refdb_backend__lookup(&ref, _backend, ref_name);
 
-  if (error == GIT_ENOTFOUND)
+  if (error == GIT_ENOTFOUND) {
     *exists = 0;
-  else if (error != GIT_OK)
+    return GIT_OK;
+  } else if (error != GIT_OK) {
     return error;
+  }
 
   /* Otherwise, the reference was found */
   git_reference_free(ref);
