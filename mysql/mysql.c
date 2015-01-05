@@ -87,14 +87,14 @@ static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
   if (mysql_stmt_bind_param(backend->st_read_header, bind_buffers) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // execute the statement
   if (mysql_stmt_execute(backend->st_read_header) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_stmt_store_result(backend->st_read_header) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // this should either be 0 or 1
   // if it's > 1 MySQL's unique index failed and we should all fear for our lives
@@ -123,7 +123,7 @@ static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_
 
   // reset the statement for further use
   if (mysql_stmt_reset(backend->st_read_header) != 0)
-    return 0;
+    return GIT_ERROR;
 
   return error;
 }
@@ -237,14 +237,14 @@ static int mysql_odb_backend__read(void **data_p, size_t *len_p, git_otype *type
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
   if (mysql_stmt_bind_param(backend->st_read, bind_buffers) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // execute the statement
   if (mysql_stmt_execute(backend->st_read) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_stmt_store_result(backend->st_read) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // this should either be 0 or 1
   // if it's > 1 MySQL's unique index failed and we should all fear for our lives
@@ -294,7 +294,7 @@ static int mysql_odb_backend__read(void **data_p, size_t *len_p, git_otype *type
 
   // reset the statement for further use
   if (mysql_stmt_reset(backend->st_read) != 0)
-    return 0;
+    return GIT_ERROR;
 
   return error;
 }
@@ -318,14 +318,14 @@ static int mysql_odb_backend__exists(git_odb_backend *_backend, const git_oid *o
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
   if (mysql_stmt_bind_param(backend->st_read_header, bind_buffers) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // execute the statement
   if (mysql_stmt_execute(backend->st_read_header) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_stmt_store_result(backend->st_read_header) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // now lets see if any rows matched our query
   // this should either be 0 or 1
@@ -336,7 +336,7 @@ static int mysql_odb_backend__exists(git_odb_backend *_backend, const git_oid *o
 
   // reset the statement for further use
   if (mysql_stmt_reset(backend->st_read_header) != 0)
-    return 0;
+    return GIT_ERROR;
 
   return found;
 }
@@ -443,14 +443,14 @@ static int mysql_refdb_backend__lookup(git_reference **out,
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
   if (mysql_stmt_bind_param(backend->st_lookup, bind_buffers) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // execute the statement
   if (mysql_stmt_execute(backend->st_lookup) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_stmt_store_result(backend->st_lookup) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_stmt_num_rows(backend->st_lookup) == 0) {
     error = GIT_ENOTFOUND;
@@ -488,7 +488,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
 
   // reset the statement for further use
   if (mysql_stmt_reset(backend->st_lookup) != 0)
-    return 0;
+    return GIT_ERROR;
 
   return error;
 }
@@ -540,11 +540,11 @@ static int mysql_refdb_backend__delete(git_refdb_backend *_backend,
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
   if (mysql_stmt_bind_param(backend->st_delete, bind_buffers) != 0)
-    return 0;
+    return GIT_ERROR;
 
   /* execute the statement */
   if (mysql_stmt_execute(backend->st_delete) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_affected_rows(backend->db) == 0) {
     error = GIT_ENOTFOUND;
@@ -556,7 +556,7 @@ static int mysql_refdb_backend__delete(git_refdb_backend *_backend,
 
   /* reset the statement for further use */
   if (mysql_stmt_reset(backend->st_delete) != 0)
-    return 0;
+    return GIT_ERROR;
 
   return error;
 }
@@ -621,11 +621,11 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   bind_buffers[1].length = &bind_buffers[0].buffer_length;
   bind_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
   if (mysql_stmt_bind_param(backend->st_write, bind_buffers) != 0)
-    return 0;
+    return GIT_ERROR;
 
   // execute the statement
   if (mysql_stmt_execute(backend->st_write) != 0)
-    return 0;
+    return GIT_ERROR;
 
   if (mysql_affected_rows(backend->db) != 1) {
     /* Something bad happened. Error reporting (to stderr) would be nice,
@@ -637,7 +637,7 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
 
   /* reset the statement for further use */
   if (mysql_stmt_reset(backend->st_write) != 0)
-    return 0;
+    return GIT_ERROR;
 
   return error;
 }
