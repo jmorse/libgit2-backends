@@ -521,10 +521,45 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
   abort();
 }
 
-static int mysql_refdb_backend__delete(git_refdb_backend *backend,
+static int mysql_refdb_backend__delete(git_refdb_backend *_backend,
         const char *ref_name)
 {
-  abort();
+  MYSQL_BIND bind_buffers[1];
+  mysql_refdb_backend *backend;
+  int error;
+
+  assert(_backend && ref_name);
+
+  backend = (mysql_refdb_backend*)_backend;
+
+  memset(bind_buffers, 0, sizeof(bind_buffers));
+
+  /* Pretty straightforward procedure: bind reference name to delete query,
+   * and execute. Return an error if the reference did not exist. */
+  bind_buffers[0].buffer = (void*)ref_name;
+  bind_buffers[0].buffer_length = strlen(ref_name);
+  bind_buffers[0].length = &bind_buffers[0].buffer_length;
+  bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
+  if (mysql_stmt_bind_param(backend->st_delete, bind_buffers) != 0)
+    return 0;
+
+  /* execute the statement */
+  if (mysql_stmt_execute(backend->st_delete) != 0)
+    return 0;
+
+  if (mysql_affected_rows(backend->db) == 0) {
+    error = GIT_ENOTFOUND;
+  } else {
+    /* XXX -- diagnostic if an unexpected number of rows are delete would be
+     * nice */
+    error = GIT_OK;
+  }
+
+  /* reset the statement for further use */
+  if (mysql_stmt_reset(backend->st_delete) != 0)
+    return 0;
+
+  return error;
 }
 
 static int mysql_refdb_backend__write(git_refdb_backend *_backend,
