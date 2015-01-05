@@ -643,9 +643,26 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   return error;
 }
 
-static void mysql_refdb_backend__free(git_refdb_backend *backend)
+static void mysql_refdb_backend__free(git_refdb_backend *_backend)
 {
-  abort();
+  mysql_refdb_backend *backend;
+
+  assert(_backend);
+
+  backend = (mysql_refdb_backend *)_backend;
+
+  if (backend->st_lookup)
+    mysql_stmt_close(backend->st_lookup);
+  if (backend->st_write)
+    mysql_stmt_close(backend->st_write);
+  if (backend->st_delete)
+    mysql_stmt_close(backend->st_delete);
+  if (backend->st_iterate)
+    mysql_stmt_close(backend->st_iterate);
+
+  mysql_close(backend->db);
+
+  free(backend);
 }
 
 static int create_table(MYSQL *db)
