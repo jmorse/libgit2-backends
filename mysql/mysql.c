@@ -521,16 +521,79 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
   abort();
 }
 
-static int mysql_refdb_backend__write(git_refdb_backend *backend,
-        const git_reference *ref, int force)
-{
-  abort();
-}
-
 static int mysql_refdb_backend__delete(git_refdb_backend *backend,
         const char *ref_name)
 {
   abort();
+}
+
+static int mysql_refdb_backend__write(git_refdb_backend *_backend,
+        const git_reference *ref, int force)
+{
+  mysql_refdb_backend *backend;
+  int error;
+  int does_it_exist = 0;
+  MYSQL_BIND bind_buffers[1];
+  MYSQL_BIND result_buffers[2];
+  const char *refname;
+
+  assert(_backend && ref);
+
+  backend = (mysql_refdb_backend *)_backend;
+  error = GIT_ERROR;
+  refname = git_reference_name(ref);
+
+  /* Procedure: we have a reference to write, which may or may not already exist
+   * in the database. Look it up to determine if it does. If it does, only
+   * overwrite if the force flag is given (by deleting it first). Finally, to
+   * actually write, bind and execute a query. */
+
+  /* First: does it already exist? */
+  error = mysql_refdb_backend__exists(&does_it_exist, _backend, refname);
+  if (error != GIT_OK)
+    return error;
+
+  if (does_it_exist) {
+    if (force == 0) {
+      return GIT_EEXISTS;
+    }
+
+    /* The reference exists, but we're force writing it. Delete it first. */
+    error = mysql_refdb_backend__delete(_backend, refname);
+    if (error != GIT_OK)
+      return error;
+  }
+
+  /* Now proceed to actually writing to the desired reference */
+
+  memset(bind_buffers, 0, sizeof(bind_buffers));
+  memset(result_buffers, 0, sizeof(result_buffers));
+
+  /* bind the refname passed to the statement */
+  bind_buffers[0].buffer = (void*)refname;
+  bind_buffers[0].buffer_length = strlen(refname);
+  bind_buffers[0].length = &bind_buffers[0].buffer_length;
+  bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
+  if (mysql_stmt_bind_param(backend->st_write, bind_buffers) != 0)
+    return 0;
+
+  // execute the statement
+  if (mysql_stmt_execute(backend->st_write) != 0)
+    return 0;
+
+  if (mysql_affected_rows(backend->db) != 1) {
+    /* Something bad happened. Error reporting (to stderr) would be nice,
+     * however not now XXX */
+    error = GIT_ERROR;
+  } else {
+    error = GIT_OK;
+  }
+
+  /* reset the statement for further use */
+  if (mysql_stmt_reset(backend->st_write) != 0)
+    return 0;
+
+  return error;
 }
 
 static void mysql_refdb_backend__free(git_refdb_backend *backend)
