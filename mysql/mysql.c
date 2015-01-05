@@ -533,15 +533,22 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   mysql_refdb_backend *backend;
   int error;
   int does_it_exist = 0;
-  MYSQL_BIND bind_buffers[1];
-  MYSQL_BIND result_buffers[2];
+  MYSQL_BIND bind_buffers[2];
   const char *refname;
+  const git_oid *oid;
 
   assert(_backend && ref);
 
   backend = (mysql_refdb_backend *)_backend;
   error = GIT_ERROR;
   refname = git_reference_name(ref);
+  oid = git_reference_target(ref);
+
+  /* If oid is null, then it's a symbolic reference. These are not supported by
+   * this backend right now (perhaps won't be at all), so return an error.
+   * XXX diagnostics */
+  if (!oid)
+    return GIT_ERROR;
 
   /* Procedure: we have a reference to write, which may or may not already exist
    * in the database. Look it up to determine if it does. If it does, only
@@ -567,13 +574,18 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   /* Now proceed to actually writing to the desired reference */
 
   memset(bind_buffers, 0, sizeof(bind_buffers));
-  memset(result_buffers, 0, sizeof(result_buffers));
 
   /* bind the refname passed to the statement */
   bind_buffers[0].buffer = (void*)refname;
   bind_buffers[0].buffer_length = strlen(refname);
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
+
+  /* Bind the target OID in too */
+  bind_buffers[1].buffer = (void*)oid->id;;
+  bind_buffers[1].buffer_length = GIT_OID_RAWSZ ;
+  bind_buffers[1].length = &bind_buffers[0].buffer_length;
+  bind_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
   if (mysql_stmt_bind_param(backend->st_write, bind_buffers) != 0)
     return 0;
 
