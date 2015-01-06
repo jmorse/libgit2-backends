@@ -19,7 +19,7 @@ int git_odb_backend_mysql_create(const char *mysql_host,
          unsigned int mysql_port, const char *mysql_unix_socket,
          unsigned long mysql_client_flag);
 
-static void
+void
 nope(const char *message, ...)
 {
   va_list args;

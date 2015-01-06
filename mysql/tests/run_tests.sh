@@ -15,22 +15,38 @@
 # 1. Compile object files and programs that make up the tests.
 gcc common.c -c
 
+test_progs="create_db"
+
+# Check that the parent dir contains a compiled copy of the custom backend.
+# Insert it into the search path for libraries, so that we can link at
+# runtime.
+stat ../libgit2-mysql.so >/dev/null 2>&1
+if test "$?" != 0; then
+	echo "Couldn't stat ../libgit2-mysql.so" >&2
+	exit 1
+fi
+export LD_LIBRARY_PATH=`pwd`/..:$LD_LIBRARY_PATH
+
+for i in $test_progs; do
+	gcc ${i}.c common.o -lgit2 ../libgit2-mysql.so -o $i
+done
+
 # 2. Test and/or configure mysql connection
 
 if test -z "$LIBGIT2_MYSQL_TEST_HOSTNAME"; then
-  LIBGIT2_MYSQL_TEST_HOSTNAME="localhost"
+  export LIBGIT2_MYSQL_TEST_HOSTNAME="localhost"
 fi
 
 if test -z "$LIBGIT2_MYSQL_TEST_USERNAME"; then
-  LIBGIT2_MYSQL_TEST_USERNAME="root"
+  export LIBGIT2_MYSQL_TEST_USERNAME="root"
 fi
 
 if test -z "$LIBGIT2_MYSQL_TEST_PASSWORD"; then
-  LIBGIT2_MYSQL_TEST_PASSWORD="" # Yup
+  export LIBGIT2_MYSQL_TEST_PASSWORD="" # Yup
 fi
 
 if test -z "$LIBGIT2_MYSQL_TEST_DBNAME"; then
-  LIBGIT2_MYSQL_TEST_DBNAME="gitdb"
+  export LIBGIT2_MYSQL_TEST_DBNAME="gitdb"
 fi
 
 # Actually test this configuration
@@ -81,3 +97,41 @@ if test "$?" != 0; then
 fi
 
 # 3. Run tests
+
+errors=0
+
+for test in $test_progs; do
+	# At the start of each test, reset the database state
+	./reset_db.sh $optionfile
+
+	# And if that fails, quit
+	if test "$?" != 0; then
+		echo "Could not reset database state"
+		exit 1
+	fi
+
+	# Run the test
+	./$test
+
+	# Did it explode?
+	if test "$?" != 0; then
+		echo "Test $test FAILED"
+		errors=1
+		continue
+	fi
+
+	# Check that the db is in the expected state
+	./${test}.sh $optionfile
+
+	# Did it explode?
+	if test "$?" != 0; then
+		echo "Test $test FAILED (bad db state)"
+		errors=1
+	fi
+done
+
+if test "$errors" = 0; then
+	echo "No errors found"
+else
+	echo "There were errors"
+fi
