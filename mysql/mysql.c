@@ -74,6 +74,7 @@ typedef struct {
   char **refnames;
   git_oid *oids;
   unsigned long numrows;
+  unsigned long cur_pos;
 } mysql_refdb_iterator;
 
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
@@ -527,13 +528,33 @@ static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *_backend,
 static int mysql_refdb_iterator_next(git_reference **ref,
         git_reference_iterator *iter)
 {
-  abort();
+  mysql_refdb_iterator *myit = (mysql_refdb_iterator*)iter;
+
+  if (myit->cur_pos == myit->numrows)
+    return GIT_ITEROVER;
+
+  *ref = git_reference__alloc(myit->refnames[myit->cur_pos],
+                &myit->oids[myit->cur_pos], NULL);
+
+  if (*ref == NULL) {
+    giterr_set_oom();
+    return GIT_ERROR;
+  }
+
+  myit->cur_pos++;
+  return GIT_OK;
 }
 
 static int mysql_refdb_iterator_next_name(const char **ref_name,
         git_reference_iterator *iter)
 {
-  abort();
+  mysql_refdb_iterator *myit = (mysql_refdb_iterator*)iter;
+
+  if (myit->cur_pos == myit->numrows)
+    return GIT_ITEROVER;
+
+  *ref_name = myit->refnames[myit->cur_pos++];
+  return GIT_OK;
 }
 
 static void mysql_refdb_iterator_free(git_reference_iterator *iter)
@@ -589,6 +610,9 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     MYSQL_BIND result_buffers[2];
     unsigned long refname_len, i;
 
+    /* Allocate and initialize fields in myit to store the result rows from the
+     * query */
+    myit->cur_pos = 0;
     myit->numrows = mysql_stmt_num_rows(myit->backend->st_iterate);
     if (myit->numrows >= (ULONG_MAX / sizeof(char*)) ||
         myit->numrows >= (ULONG_MAX / GIT_OID_RAWSZ))
