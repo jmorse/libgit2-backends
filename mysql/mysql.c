@@ -66,6 +66,11 @@ typedef struct {
   MYSQL_STMT *st_delete;
 } mysql_refdb_backend;
 
+typedef struct {
+  git_reference_iterator parent;
+  mysql_refdb_backend *backend;
+} mysql_refdb_iterator;
+
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
 {
   mysql_odb_backend *backend;
@@ -514,10 +519,40 @@ static int mysql_refdb_backend__exists(int *exists, git_refdb_backend *_backend,
   return GIT_OK;
 }
 
+static int mysql_refdb_iterator_next(git_reference **ref,
+        git_reference_iterator *iter)
+{
+  abort();
+}
+
+static int mysql_refdb_iterator_next_name(const char **ref_name,
+        git_reference_iterator *iter)
+{
+  abort();
+}
+
+static void mysql_refdb_iterator_free(git_reference_iterator *iter)
+{
+  abort();
+}
+
 static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
         struct git_refdb_backend *backend, const char *glob)
 {
-  abort();
+  mysql_refdb_iterator *myit;
+
+  myit = calloc(1, sizeof(mysql_refdb_iterator));
+  if (myit == NULL) {
+    giterr_set_oom();
+    return GIT_ERROR;
+  }
+
+  myit->parent.next = mysql_refdb_iterator_next;
+  myit->parent.next_name = mysql_refdb_iterator_next_name;
+  myit->parent.free = mysql_refdb_iterator_free;
+  myit->backend = (mysql_refdb_backend*)backend;
+  *iter = &myit->parent;
+  return GIT_OK;
 }
 
 static int mysql_refdb_backend__delete(git_refdb_backend *_backend,
