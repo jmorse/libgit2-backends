@@ -618,8 +618,9 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     goto error;
 
   if (mysql_stmt_num_rows(myit->backend->st_iterate) == 0) {
-    /* Special case (unimplemented right now) */
-    abort();
+    /* Now rows -- indicated by iterator being over immediately (?) */
+    myit->cur_pos = 0;
+    myit->numrows = 0;
   } else {
     MYSQL_BIND result_buffers[2];
     unsigned long refname_len, i;
