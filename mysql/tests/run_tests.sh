@@ -15,7 +15,7 @@
 # 1. Compile object files and programs that make up the tests.
 gcc common.c -c
 
-test_progs="create_db open_db"
+test_progs="create_db open_db open_db_fail"
 
 # Check that the parent dir contains a compiled copy of the custom backend.
 # Insert it into the search path for libraries, so that we can link at
@@ -110,14 +110,28 @@ for test in $test_progs; do
 		exit 1
 	fi
 
+	# Is this an XFail test?
+	echo $test | grep -q "fail"
+	if test "$?" = 0; then
+		xfail=1
+	else
+		xfail=0
+	fi
+
 	# Run the test
-	./test_sources/$test
+	./test_sources/$test > /dev/null 2>&1
 
 	# Did it explode?
 	if test "$?" != 0; then
-		echo "Test $test FAILED"
-		errors=1
-		continue
+		# Is it XFail?
+		if test "$xfail" != 1; then
+			echo "Test $test FAILED"
+			errors=1
+			continue
+		else
+			echo "Test $test succeeded (xfail)"
+			continue
+		fi
 	fi
 
 	# Check that the db is in the expected state. There might not be a
