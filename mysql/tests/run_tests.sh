@@ -28,7 +28,7 @@ fi
 export LD_LIBRARY_PATH=`pwd`/..:$LD_LIBRARY_PATH
 
 for i in $test_progs; do
-	gcc ${i}.c common.o -lgit2 ../libgit2-mysql.so -o $i
+	gcc test_sources/${i}.c common.o -lgit2 ../libgit2-mysql.so -o test_sources/$i
 done
 
 # 2. Test and/or configure mysql connection
@@ -111,7 +111,7 @@ for test in $test_progs; do
 	fi
 
 	# Run the test
-	./$test
+	./test_sources/$test
 
 	# Did it explode?
 	if test "$?" != 0; then
@@ -121,7 +121,7 @@ for test in $test_progs; do
 	fi
 
 	# Check that the db is in the expected state
-	./${test}.sh $optionfile
+	./check_scripts/${test}.sh $optionfile
 
 	# Did it explode?
 	if test "$?" != 0; then
