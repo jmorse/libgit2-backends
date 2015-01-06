@@ -559,7 +559,22 @@ static int mysql_refdb_iterator_next_name(const char **ref_name,
 
 static void mysql_refdb_iterator_free(git_reference_iterator *iter)
 {
-  abort();
+  mysql_refdb_iterator *myit = (mysql_refdb_iterator*)iter;
+
+  if (myit->refnames) {
+    unsigned int i;
+
+    /* Free any allocated refnames */
+    for (i = 0; i < myit->numrows; i++)
+      if (myit->refnames[i])
+        free(myit->refnames[i]);
+
+    free(myit->refnames);
+  }
+
+  if (myit->oids)
+    free(myit->oids);
+  free(myit);
 }
 
 static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
@@ -675,23 +690,8 @@ oom:
   giterr_set_oom();
 
 error:
-  /* Unwind all the things */
-  if (myit) {
-    if (myit->refnames) {
-      unsigned int i;
-
-      /* Free any allocated refnames */
-      for (i = 0; i < myit->numrows; i++)
-        if (myit->refnames[i])
-          free(myit->refnames[i]);
-
-      free(myit->refnames);
-    }
-
-    if (myit->oids)
-      free(myit->oids);
-    free(myit);
-  }
+  if (myit)
+    myit->parent.free(&myit->parent);
 
   return error;
 }
