@@ -73,7 +73,7 @@ typedef struct {
   mysql_refdb_backend *backend;
   char **refnames;
   git_oid *oids;
-  unsigned int numrows;
+  unsigned long numrows;
 } mysql_refdb_iterator;
 
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
@@ -587,12 +587,11 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     abort();
   } else {
     MYSQL_BIND result_buffers[2];
-    unsigned long refname_len;
-    unsigned int i;
+    unsigned long refname_len, i;
 
     myit->numrows = mysql_stmt_num_rows(myit->backend->st_iterate);
-    if (myit->numrows >= (INT_MAX * sizeof(char*)) ||
-        myit->numrows >= (INT_MAX / GIT_OID_RAWSZ))
+    if (myit->numrows >= (ULONG_MAX / sizeof(char*)) ||
+        myit->numrows >= (ULONG_MAX / GIT_OID_RAWSZ))
       /* Nope */
       goto error;
 
