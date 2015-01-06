@@ -567,7 +567,6 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
 {
   MYSQL_BIND bind_buffers[1];
   mysql_refdb_iterator *myit = NULL;
-  char *escaped_glob = NULL, *query = NULL;
   int error = GIT_ERROR;
 
   /* Reject any glob with either '%' or '?' in it. These aren't allowed by the
@@ -693,11 +692,6 @@ error:
       free(myit->oids);
     free(myit);
   }
-
-  if (escaped_glob)
-    free(escaped_glob);
-  if (query)
-    free(query);
 
   return error;
 }
