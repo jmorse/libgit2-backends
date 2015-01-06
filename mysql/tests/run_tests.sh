@@ -15,7 +15,7 @@
 # 1. Compile object files and programs that make up the tests.
 gcc common.c -c
 
-test_progs="create_db"
+test_progs="create_db open_db"
 
 # Check that the parent dir contains a compiled copy of the custom backend.
 # Insert it into the search path for libraries, so that we can link at
@@ -120,15 +120,34 @@ for test in $test_progs; do
 		continue
 	fi
 
-	# Check that the db is in the expected state
+	# Check that the db is in the expected state. There might not be a
+	# checker script, in which case we just continue.
+	stat ./check_scripts/${test}.sh >/dev/null 2>&1
+	if test "$?" != 0; then
+		# This is fine
+		echo "Test $test succeeded (no db check)"
+		continue
+	fi
 	./check_scripts/${test}.sh $optionfile
 
 	# Did it explode?
 	if test "$?" != 0; then
 		echo "Test $test FAILED (bad db state)"
 		errors=1
+	else
+		echo "Test $test succeeded"
 	fi
 done
+
+# Reset db at end
+./reset_db.sh $optionfile
+
+if test "$?" != 0; then
+	echo "Couldn't reset final db state"
+	exit 1
+fi
+
+
 
 if test "$errors" = 0; then
 	echo "No errors found"
