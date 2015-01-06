@@ -35,6 +35,50 @@ init_git()
   git_threads_init();
 }
 
+static void
+getenv_data(const char **hostname, const char **username, const char **password,
+        const char **dbname, const char **portno, const char **unixsocket)
+{
+
+  *hostname = getenv("LIBGIT2_MYSQL_TEST_HOSTNAME");
+  if (!*hostname)
+    nope("Expected test mysql server hostname in environment\n");
+
+  *username = getenv("LIBGIT2_MYSQL_TEST_USERNAME");
+  if (!*username)
+    nope("Expected test mysql server username in environment\n");
+
+  *password = getenv("LIBGIT2_MYSQL_TEST_PASSWORD");
+  if (!*username)
+    nope("Expected test mysql server password in environment\n");
+
+  *dbname = getenv("LIBGIT2_MYSQL_TEST_DBNAME");
+  if (!*username)
+    nope("Expected test mysql server database name in environment\n");
+
+  *portno = getenv("LIBGIT2_MYSQL_TEST_PORTNO");
+  *unixsocket = getenv("LIBGIT2_MYSQL_TEST_UNIXSOCKET");
+}
+
+int
+create_repo_from_env()
+{
+  const char *hostname, *username, *password, *dbname, *portno, *unixsocket;
+  unsigned int actual_portno;
+  int error;
+
+  getenv_data(&hostname, &username, &password, &dbname, &portno, &unixsocket);
+
+  if (portno)
+    actual_portno = atoi(portno);
+  else
+    actual_portno = 3306;
+
+  error = git_odb_backend_mysql_create(hostname, username, password, dbname,
+                actual_portno, unixsocket, 0);
+  return error;
+}
+
 git_repository *
 open_repo_from_env()
 {
@@ -47,24 +91,7 @@ open_repo_from_env()
   unsigned int actual_portno;
   int error;
 
-  hostname = getenv("LIBGIT2_MYSQL_TEST_HOSTNAME");
-  if (!hostname)
-    nope("Expected test mysql server hostname in environment\n");
-
-  username = getenv("LIBGIT2_MYSQL_TEST_USERNAME");
-  if (!username)
-    nope("Expected test mysql server username in environment\n");
-
-  password = getenv("LIBGIT2_MYSQL_TEST_PASSWORD");
-  if (!username)
-    nope("Expected test mysql server password in environment\n");
-
-  dbname = getenv("LIBGIT2_MYSQL_TEST_DBNAME");
-  if (!username)
-    nope("Expected test mysql server database name in environment\n");
-
-  portno = getenv("LIBGIT2_MYSQL_TEST_PORTNO");
-  unixsocket = getenv("LIBGIT2_MYSQL_TEST_UNIXSOCKET");
+  getenv_data(&hostname, &username, &password, &dbname, &portno, &unixsocket);
 
   if (portno)
     actual_portno = atoi(portno);
