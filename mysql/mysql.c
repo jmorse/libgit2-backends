@@ -25,6 +25,8 @@
 
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
+
 #include <git2.h>
 #include <git2/oid.h>
 #include <git2/odb_backend.h>
@@ -69,6 +71,9 @@ typedef struct {
 typedef struct {
   git_reference_iterator parent;
   mysql_refdb_backend *backend;
+  char **refnames;
+  git_oid *oids;
+  unsigned int numrows;
 } mysql_refdb_iterator;
 
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
@@ -539,20 +544,139 @@ static void mysql_refdb_iterator_free(git_reference_iterator *iter)
 static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
         struct git_refdb_backend *backend, const char *glob)
 {
-  mysql_refdb_iterator *myit;
+  MYSQL_BIND bind_buffers[1];
+  mysql_refdb_iterator *myit = NULL;
+  char *escaped_glob = NULL, *query = NULL;
+  int error = GIT_ERROR;
+
+  /* Reject any glob with either '%' or '?' in it. These aren't allowed by the
+   * reference definitions of git anyway, but there's a risk they'll muck up
+   * the query we're making, in a way that upsets the user */
+  if (strchr(glob, '%') != NULL)
+    return GIT_EINVALIDSPEC;
+
+  if (strchr(glob, '?') != NULL)
+    return GIT_EINVALIDSPEC;
+
+  *iter = NULL;
 
   myit = calloc(1, sizeof(mysql_refdb_iterator));
-  if (myit == NULL) {
-    giterr_set_oom();
-    return GIT_ERROR;
-  }
+  if (!myit)
+    goto oom;
 
   myit->parent.next = mysql_refdb_iterator_next;
   myit->parent.next_name = mysql_refdb_iterator_next_name;
   myit->parent.free = mysql_refdb_iterator_free;
   myit->backend = (mysql_refdb_backend*)backend;
+
+  memset(bind_buffers, 0, sizeof(bind_buffers));
+
+  bind_buffers[0].buffer = (void*)glob;
+  bind_buffers[0].buffer_length = strlen(glob);
+  bind_buffers[0].length = &bind_buffers[0].buffer_length;
+  bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
+  if (mysql_stmt_bind_param(myit->backend->st_iterate, bind_buffers) != 0)
+   goto error;
+
+  // execute the statement
+  if (mysql_stmt_execute(myit->backend->st_iterate) != 0)
+    goto error;
+
+  if (mysql_stmt_num_rows(myit->backend->st_iterate) == 0) {
+    /* Special case (unimplemented right now) */
+    abort();
+  } else {
+    MYSQL_BIND result_buffers[2];
+    unsigned long refname_len;
+    unsigned int i;
+
+    myit->numrows = mysql_stmt_num_rows(myit->backend->st_iterate);
+    if (myit->numrows >= (INT_MAX * sizeof(char*)) ||
+        myit->numrows >= (INT_MAX / GIT_OID_RAWSZ))
+      /* Nope */
+      goto error;
+
+    myit->refnames = calloc(1, sizeof(char *) * myit->numrows);
+    if (!myit->refnames)
+      goto oom;
+
+    myit->oids = malloc(sizeof(git_oid) * myit->numrows);
+    if (!myit->oids)
+      goto oom;
+
+    /* Now proceed to iterate through each row, fetching data into the
+     * allocated buffers. Unpleasent as the refname can be an arbitary
+     * length string */
+
+    memset(result_buffers, 0, sizeof(result_buffers));
+
+    for (i = 0; i < myit->numrows; i++) {
+      refname_len = 0;
+      result_buffers[0].buffer_type = MYSQL_TYPE_STRING;
+      result_buffers[0].buffer = NULL;
+      result_buffers[0].buffer_length = 0;
+      result_buffers[0].length = &refname_len;
+
+      result_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
+      result_buffers[1].buffer = &myit->oids[i];
+      result_buffers[1].buffer_length = GIT_OID_RAWSZ;
+      memset(result_buffers[1].buffer, 0, GIT_OID_RAWSZ);
+
+      if (mysql_stmt_bind_result(myit->backend->st_iterate, result_buffers) != 0)
+        goto error;
+
+      if (mysql_stmt_fetch(myit->backend->st_iterate) != 0)
+        goto error;
+
+      /* Allocate an actual buffer for the refname, the size of which has now
+       * been specified by mysql */
+      if (refname_len >= ULONG_MAX - 1UL || refname_len == 0)
+        goto error;
+
+      myit->refnames[i] = malloc(refname_len + 1UL);
+      if (!myit->refnames[i])
+        goto oom;
+
+      result_buffers[0].buffer = myit->refnames[i];
+      result_buffers[0].buffer_length = refname_len;
+
+      if (mysql_stmt_fetch_column(myit->backend->st_iterate, &result_buffers[0], 0, 0) != 0)
+        goto error;
+    }
+  }
+
   *iter = &myit->parent;
+
   return GIT_OK;
+
+oom:
+  giterr_set_oom();
+
+error:
+  /* Unwind all the things */
+  if (myit) {
+    if (myit->refnames) {
+      unsigned int i;
+
+      /* Free any allocated refnames */
+      for (i = 0; i < myit->numrows; i++)
+        if (myit->refnames[i])
+          free(myit->refnames[i]);
+
+      free(myit->refnames);
+    }
+
+    if (myit->oids)
+      free(myit->oids);
+    free(myit);
+  }
+
+  if (escaped_glob)
+    free(escaped_glob);
+  if (query)
+    free(query);
+
+  return error;
 }
 
 static int mysql_refdb_backend__delete(git_refdb_backend *_backend,
@@ -841,15 +965,14 @@ static int init_refdb_statements(mysql_refdb_backend *backend)
   static const char *sql_lookup =
     "SELECT `oid` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
 
-  static const char *sql_iterate =
-    "SELECT `refname`, `oid` FROM `" GIT2_REFDB_TABLE_NAME "`;";
-
   static const char *sql_write =
     "INSERT INTO `" GIT2_REFDB_TABLE_NAME "` VALUES (?, ?);";
 
   static const char *sql_delete =
     "DELETE FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
 
+  static const char *sql_iterate =
+    "SELECT `refname`, `oid` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` LIKE REPLACE(REPLACE(?, '?', '_'), '*', '%');";
 
   backend->st_lookup = mysql_stmt_init(backend->db);
   if (backend->st_lookup == NULL)
@@ -859,17 +982,6 @@ static int init_refdb_statements(mysql_refdb_backend *backend)
     return GIT_ERROR;
 
   if (mysql_stmt_prepare(backend->st_lookup, sql_lookup, strlen(sql_lookup)) != 0)
-    return GIT_ERROR;
-
-
-  backend->st_iterate = mysql_stmt_init(backend->db);
-  if (backend->st_iterate == NULL)
-    return GIT_ERROR;
-
-  if (mysql_stmt_attr_set(backend->st_iterate, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
-    return GIT_ERROR;
-
-  if (mysql_stmt_prepare(backend->st_iterate, sql_iterate, strlen(sql_iterate)) != 0)
     return GIT_ERROR;
 
 
@@ -893,6 +1005,18 @@ static int init_refdb_statements(mysql_refdb_backend *backend)
 
   if (mysql_stmt_prepare(backend->st_delete, sql_delete, strlen(sql_delete)) != 0)
     return GIT_ERROR;
+
+
+  backend->st_iterate = mysql_stmt_init(backend->db);
+  if (backend->st_iterate == NULL)
+    return GIT_ERROR;
+
+  if (mysql_stmt_attr_set(backend->st_iterate, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    return GIT_ERROR;
+
+  if (mysql_stmt_prepare(backend->st_iterate, sql_iterate, strlen(sql_iterate)) != 0)
+    return GIT_ERROR;
+
 
   return GIT_OK;
 }
