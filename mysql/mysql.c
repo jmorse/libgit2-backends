@@ -795,7 +795,7 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   /* Bind the target OID in too */
   bind_buffers[1].buffer = (void*)oid->id;;
   bind_buffers[1].buffer_length = GIT_OID_RAWSZ ;
-  bind_buffers[1].length = &bind_buffers[0].buffer_length;
+  bind_buffers[1].length = &bind_buffers[1].buffer_length;
   bind_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
   if (mysql_stmt_bind_param(backend->st_write, bind_buffers) != 0)
     return GIT_ERROR;
