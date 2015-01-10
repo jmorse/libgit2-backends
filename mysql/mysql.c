@@ -187,7 +187,7 @@ static int mysql_odb_backend__read_prefix(git_oid *output_oid, void **out_buf,
     assert(mysql_stmt_num_rows(backend->st_read_prefix) == 1);
 
     result_buffers[0].buffer_type = MYSQL_TYPE_TINY;
-    result_buffers[0].buffer = &out_type;
+    result_buffers[0].buffer = out_type;
     result_buffers[0].buffer_length = sizeof(*out_type);
     memset(out_type, 0, sizeof(*out_type));
 
