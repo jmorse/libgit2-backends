@@ -807,8 +807,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
     if(mysql_stmt_bind_result(backend->st_lookup, result_buffers) != 0)
       return GIT_ERROR;
 
-    if(mysql_stmt_fetch(backend->st_lookup) != 0)
-      return GIT_ERROR;
+    error = mysql_stmt_fetch(backend->st_lookup); /* Might return truncated */
 
     /* If there's symbolic reference name data, load it manually */
     if (symref_len > 0) {
@@ -1056,8 +1055,8 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
       if (mysql_stmt_bind_result(myit->backend->st_iterate, result_buffers) != 0)
         goto error;
 
-      if (mysql_stmt_fetch(myit->backend->st_iterate) != 0)
-        goto error;
+      /* May legitimately return 'truncated' */
+      mysql_stmt_fetch(myit->backend->st_iterate);
 
       /* Allocate an actual buffer for the refname, the size of which has now
        * been specified by mysql */
