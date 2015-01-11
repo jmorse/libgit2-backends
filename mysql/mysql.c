@@ -746,7 +746,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
         git_refdb_backend *_backend, const char *ref_name)
 {
   mysql_refdb_backend *backend;
-  void *refname_buffer = NULL;
+  char *refname_buffer = NULL;
   int error;
   MYSQL_BIND bind_buffers[1];
   MYSQL_BIND result_buffers[3];
@@ -811,12 +811,15 @@ static int mysql_refdb_backend__lookup(git_reference **out,
 
     /* If there's symbolic reference name data, load it manually */
     if (symref_len > 0) {
-      refname_buffer = malloc(symref_len);
+      refname_buffer = malloc(symref_len + 1UL);
       if (refname_buffer == NULL) {
         giterr_set_oom();
         error = GIT_ERROR;
 	goto out;
       }
+
+      /* Null terminate the string. Not sure if mysql does this already. */
+      refname_buffer[symref_len] = '\0';
 
       result_buffers[2].buffer = refname_buffer;
       result_buffers[2].buffer_length = symref_len;
@@ -1067,6 +1070,9 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
       if (!myit->refnames[i])
         goto oom;
 
+      /* Null terminate the string. Not sure if mysql does this already. */
+      myit->refnames[i][refname_len] = '\0';
+
       result_buffers[0].buffer = myit->refnames[i];
       result_buffers[0].buffer_length = refname_len;
 
@@ -1084,6 +1090,8 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
       myit->symnames[i] = malloc(sym_len + 1UL);
       if (!myit->symnames[i])
         goto oom;
+
+      myit->symnames[i][sym_len] = '\0';
 
       result_buffers[3].buffer = myit->symnames[i];
       result_buffers[3].buffer_length = sym_len;
