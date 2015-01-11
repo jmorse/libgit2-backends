@@ -82,7 +82,7 @@ typedef struct {
   git_reference_iterator parent;
   mysql_refdb_backend *backend;
   char **refnames;
-  git_ref_t *types;
+  unsigned char *types;
   git_oid *oids;
   char **symnames;
   unsigned long numrows;
@@ -750,7 +750,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
   int error;
   MYSQL_BIND bind_buffers[1];
   MYSQL_BIND result_buffers[3];
-  git_ref_t reftype;
+  unsigned char reftype;
 
   assert(out && _backend && ref_name && oid);
 
@@ -788,7 +788,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
     assert(mysql_stmt_num_rows(backend->st_lookup) == 1);
     memset(odb_buffer, 0, sizeof(odb_buffer));
 
-    result_buffers[0].buffer_type = MYSQL_TYPE_SHORT;
+    result_buffers[0].buffer_type = MYSQL_TYPE_TINY;
     result_buffers[0].buffer = &reftype;
     result_buffers[0].buffer_length = sizeof(reftype);
     result_buffers[0].length = &result_buffers[0].buffer_length;
@@ -1009,7 +1009,7 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     if (!myit->refnames)
       goto oom;
 
-    myit->types = malloc(sizeof(git_ref_t) * myit->numrows);
+    myit->types = malloc(sizeof(unsigned char) * myit->numrows);
     if (!myit->types)
       goto oom;
 
@@ -1036,9 +1036,9 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
       result_buffers[0].buffer_length = 0;
       result_buffers[0].length = &refname_len;
 
-      result_buffers[1].buffer_type = MYSQL_TYPE_SHORT;
+      result_buffers[1].buffer_type = MYSQL_TYPE_TINY;
       result_buffers[1].buffer = &myit->types[i];
-      result_buffers[1].buffer_length = sizeof(git_ref_t);
+      result_buffers[1].buffer_length = 1;
       result_buffers[1].length = &result_buffers[1].buffer_length;
 
       result_buffers[2].buffer_type = MYSQL_TYPE_BLOB;
@@ -1158,7 +1158,7 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   MYSQL_BIND bind_buffers[4];
   const char *refname, *symname;
   const git_oid *oid;
-  git_ref_t type;
+  unsigned char type;
 
   assert(_backend && ref);
 
@@ -1204,7 +1204,7 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   bind_buffers[1].buffer = &type;
   bind_buffers[1].buffer_length = 1;
   bind_buffers[1].length = &bind_buffers[1].buffer_length;
-  bind_buffers[1].buffer_type = MYSQL_TYPE_SHORT;
+  bind_buffers[1].buffer_type = MYSQL_TYPE_TINY;
 
   /* Bind the target OID in too, if it exists */
   bind_buffers[2].buffer = (oid) ? (void*)oid->id : NULL;
@@ -1277,7 +1277,7 @@ static int create_table(MYSQL *db)
   static const char *sql_create_refdb =
     "CREATE TABLE `" GIT2_REFDB_TABLE_NAME "` ("
     "  `refname` text COLLATE utf8_bin NOT NULL, "
-    "  `type` smallint(2) unsigned NOT NULL,"
+    "  `type` tinyint(1) unsigned NOT NULL,"
     "  `oid` binary(20), "
     "  `symref` TEXT COLLATE utf8_bin, "
     "  KEY `name` (`refname`(32)) "
