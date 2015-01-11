@@ -1574,6 +1574,16 @@ int git_odb_backend_mysql_create(const char *mysql_host, const char *mysql_user,
     goto cleanup;
 
   error = create_table(db);
+  if (error != GIT_OK)
+    return error;
+
+  /* Everything breaks if we don't have a HEAD ref */
+
+  /* XXX, 2 is hardcoded. Could stringify if this were a macro */
+  if (mysql_query(db, "INSERT INTO `" GIT2_REFDB_TABLE_NAME "` VALUES ('HEAD', 2, NULL, 'refs/heads/master');") != 0)
+    error = GIT_ERROR;
+  else
+    error = GIT_OK;
 
 cleanup:
   if (db)
