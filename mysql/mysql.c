@@ -24,8 +24,17 @@
  */
 
 #include <assert.h>
+#include <fcntl.h>
 #include <string.h>
 #include <limits.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include <git2.h>
 #include <git2/oid.h>
@@ -36,6 +45,7 @@
 #include <git2/sys/refs.h>
 #include <git2/errors.h>
 #include <git2/types.h>
+#include <git2/indexer.h>
 
 /* MySQL C Api docs:
  *   http://dev.mysql.com/doc/refman/5.1/en/c-api-function-overview.html
@@ -76,6 +86,14 @@ typedef struct {
   unsigned long numrows;
   unsigned long cur_pos;
 } mysql_refdb_iterator;
+
+#define MYSQL_ODB_STREAM_DIR_PATH_LEN 20
+typedef struct {
+  git_odb_writepack parent;
+  char dir_path[MYSQL_ODB_STREAM_DIR_PATH_LEN];
+  git_indexer_stream *indexer;
+  git_odb *odb; /* Only valid during commit */
+} mysql_odb_writepack;
 
 static int mysql_odb_backend__read_header(size_t *len_p, git_otype *type_p, git_odb_backend *_backend, const git_oid *oid)
 {
@@ -410,6 +428,296 @@ static int mysql_odb_backend__write(git_oid *oid, git_odb_backend *_backend, con
     return GIT_ERROR;
 
   return GIT_OK;
+}
+
+static int mysql_odb_backend__pack_add(git_odb_writepack *_wp,
+	const void *data, size_t size, git_transfer_progress *stats)
+{
+  mysql_odb_writepack *wp;
+
+  wp = (mysql_odb_writepack*)_wp;
+
+  return git_indexer_stream_add(wp->indexer, data, size, stats);
+}
+
+static int add_each_packfile_obj(const git_oid *id, void *payload)
+{
+  static const char *sql_tmp_write = "INSERT IGNORE INTO `xyzzy` VALUES (?, ?, ?, COMPRESS(?));";
+  MYSQL_BIND bind_buffers[4];
+  MYSQL_STMT *tmp_write = NULL;
+  mysql_odb_writepack *wp;
+  mysql_odb_backend *backend;
+  git_odb_object *object = NULL;
+  const void *data;
+  size_t size;
+  int error = GIT_ERROR;
+  git_otype obj_type;
+  my_bool truth = 1;
+
+  wp = (mysql_odb_writepack*)payload;
+  backend = (mysql_odb_backend *)wp->parent.backend;
+  memset(bind_buffers, 0, sizeof(bind_buffers));
+
+  /* Suckage: we need to read all of an object in, and then use a special
+   * prepared statement to insert things into the temporary table. This because
+   * we can't currently parameterise the table name. Some code replication
+   * occurs as a result; for now, just eat it. */
+  /* Oh, and as we can't name the temporary table in preprared statements, it
+   * has to be manually constructed. Hurrah. */
+
+  error = git_odb_read(&object, wp->odb, id);
+  if (error != GIT_OK)
+    return error;
+
+  data = git_odb_object_data(object);
+  size = git_odb_object_size(object);
+  obj_type = git_odb_object_type(object);
+
+
+  /* Rather than attempting to escape the given buffer, make that the mysql
+   * libraries problem by creating a prepared statement and binding into it.
+   * This isn't super efficient, but avoids manual buffer mangling. */
+
+  tmp_write = mysql_stmt_init(backend->db);
+  if (tmp_write == NULL)
+    goto bad;
+
+  if (mysql_stmt_attr_set(tmp_write, STMT_ATTR_UPDATE_MAX_LENGTH, &truth) != 0)
+    goto bad;
+
+  if (mysql_stmt_prepare(tmp_write, sql_tmp_write, strlen(sql_tmp_write)) != 0)
+    goto bad;
+
+  /* id->id is const, cast that away. This is safe because we're binding params
+   * rather than binding result buffers */
+  bind_buffers[0].buffer = (void*)id->id;
+  bind_buffers[0].buffer_length = GIT_OID_RAWSZ;
+  bind_buffers[0].length = &bind_buffers[0].buffer_length;
+  bind_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
+
+  bind_buffers[1].buffer = &obj_type;
+  bind_buffers[1].buffer_length = sizeof(obj_type);
+  bind_buffers[1].length = &bind_buffers[1].buffer_length;
+  bind_buffers[1].buffer_type = MYSQL_TYPE_TINY;
+
+  bind_buffers[2].buffer = &size;
+  bind_buffers[2].buffer_length = sizeof(size);
+  bind_buffers[2].length = &bind_buffers[2].buffer_length;
+  bind_buffers[2].buffer_type = MYSQL_TYPE_LONG;
+
+  /* Another case of casting away const */
+  bind_buffers[3].buffer = (void*)data;
+  bind_buffers[3].buffer_length = size;
+  bind_buffers[3].length = &bind_buffers[3].buffer_length;
+  bind_buffers[3].buffer_type = MYSQL_TYPE_BLOB;
+
+  if (mysql_stmt_bind_param(tmp_write, bind_buffers) != 0)
+    goto bad;
+
+  if (mysql_stmt_execute(tmp_write) != 0)
+    goto bad;
+
+  /* NB: not called with NDEBUG */
+  assert(mysql_stmt_num_rows(tmp_write) == 1);
+
+  /* Success! Free some things. */
+
+  mysql_stmt_reset(tmp_write);
+  mysql_stmt_close(tmp_write);
+  git_odb_object_free(object);
+  return GIT_OK;
+
+bad:
+  if (tmp_write)
+    mysql_stmt_close(tmp_write);
+  if (object)
+    git_odb_object_free(object);
+  return error;
+}
+
+static int mysql_odb_backend__pack_commit(git_odb_writepack *_wp,
+	git_transfer_progress *stats)
+{
+  /* Existing path + "pack-" + oid + ".idx" or ".pack" broadly */
+  char idx_path_buffer[MYSQL_ODB_STREAM_DIR_PATH_LEN + GIT_OID_HEXSZ + 16];
+  char idx_oid_buffer[GIT_OID_HEXSZ + 1];
+  mysql_odb_writepack *wp;
+  mysql_odb_backend *backend;
+  const git_oid *packfile_oid_ptr = NULL;
+  git_odb_backend *pack_backend = NULL;
+  git_odb *pack_odb = NULL;
+  int error = GIT_ERROR;
+  int free_backend = 1, must_drop_temp_table = 0;
+
+  wp = (mysql_odb_writepack*)_wp;
+  backend = (mysql_odb_backend *)wp->parent.backend;
+
+  /* The procedure for this function:
+   *  1) Finalize indexer stream
+   *  2) Open it as an odb
+   *  3) Create a temporary mysql table
+   *  4) Insert all objects from packfile odb into temp table *  5) Insert the temp table into the database (which will be atomic)
+   *       XXX -- this may _legitimately_ have duplicate oids, given that the
+   *       sent packfile can contain tree's of unchanged material.
+   *       XXX -- in the case of something like "git gc" though, we might
+   *       get delta-ified objects being written back. Just drop them for now.
+   *  6) Clean up
+   *
+   * Crucially, the merging of the temporary table into the main table will be
+   * one atomic mysql statement, which will either succeed or fail. */
+
+  /* 1: Finish index. */
+  error = git_indexer_stream_finalize(wp->indexer, stats);
+  if (error != GIT_OK)
+    return error;
+
+  /* We need to know where the indexed packfile is, to open it */
+  packfile_oid_ptr = git_indexer_stream_hash(wp->indexer);
+
+  /* 2: Open the ODB */
+  git_oid_fmt(idx_oid_buffer, packfile_oid_ptr);
+  idx_oid_buffer[GIT_OID_HEXSZ] = '\0'; /* fmt does not set a terminator */
+  sprintf(idx_path_buffer, "%s/pack-%s.idx", wp->dir_path, idx_oid_buffer);
+  error = git_odb_backend_one_pack(&pack_backend, idx_path_buffer);
+  if (error != GIT_OK)
+    goto bad;
+
+  error = git_odb_new(&pack_odb);
+  if (error != GIT_OK)
+    goto bad;
+
+  error = git_odb_add_backend(pack_odb, pack_backend, 1);
+  if (error != GIT_OK)
+    goto bad;
+
+  /* Backend will now be freed by deconstruction of odb */
+  free_backend = 0;
+  wp->odb = pack_odb;
+
+  /* 3: Create temporary table */
+
+  /* Global name is not required, apparently temporary tables are limited to
+   * the scope of our current connection. */
+  if (mysql_query(backend->db, "CREATE TEMPORARY TABLE `xyzzy` LIKE `" GIT2_ODB_TABLE_NAME "`;")) {
+    fprintf(stderr, "mysql_odb_backend__pack_commit: failed to create temp "
+		    "table\n");
+    error = GIT_ERROR;
+    goto bad;
+  }
+
+  must_drop_temp_table = 1;
+
+  /* 4: Load temporary table */
+  /* Do this by iterating over all odb contents */
+  error = git_odb_foreach(pack_odb, add_each_packfile_obj, wp);
+  if (error != GIT_OK)
+    goto bad;
+
+  /* 5: Merge temp table into db */
+  if (mysql_query(backend->db, "INSERT IGNORE INTO `" GIT2_ODB_TABLE_NAME "` (SELECT * FROM `xyzzy`);")) {
+    fprintf(stderr, "mysql_odb_backend__pack_commit: failed to merge temp table "
+		    "table\n");
+    error = GIT_ERROR;
+    goto bad;
+  }
+
+  /* 6: Clean up */
+  mysql_query(backend->db, "DROP TABLE `xyzzy`;");
+  git_odb_free(pack_odb); /* Frees backend too */
+
+  return GIT_OK;
+
+bad:
+  if (must_drop_temp_table)
+    mysql_query(backend->db, "DROP TABLE `xyzzy`;");
+  if (pack_odb)
+    git_odb_free(pack_odb);
+  if (pack_backend && free_backend)
+    pack_backend->free(pack_backend);
+  return error;
+}
+
+static void mysql_odb_backend__pack_free(git_odb_writepack *_wp)
+{
+  char idx_path_buffer[MYSQL_ODB_STREAM_DIR_PATH_LEN + GIT_OID_HEXSZ + 16];
+  char idx_oid_buffer[GIT_OID_HEXSZ + 1];
+  const git_oid *packfile_oid_ptr = NULL;
+  mysql_odb_writepack *wp;
+
+  wp = (mysql_odb_writepack*)_wp;
+
+  /* We need to:
+   *   Free the indexer
+   *   Unlink the files we've created
+   * Potentially after a transfer has aborted */
+
+  packfile_oid_ptr = git_indexer_stream_hash(wp->indexer);
+  git_oid_fmt(idx_oid_buffer, packfile_oid_ptr);
+  idx_oid_buffer[GIT_OID_HEXSZ] = '\0'; /* fmt does not set a terminator */
+  sprintf(idx_path_buffer, "%s/pack-%s.pack", wp->dir_path, idx_oid_buffer);
+  unlink(idx_path_buffer);
+  sprintf(idx_path_buffer, "%s/pack-%s.idx", wp->dir_path, idx_oid_buffer);
+  unlink(idx_path_buffer);
+
+  /* Also need to unlink the containing dir */
+  unlink(wp->dir_path);
+
+  git_indexer_stream_free(wp->indexer);
+
+  free(wp);
+  return;
+}
+
+static int mysql_odb_backend__writepack(git_odb_writepack **_wp,
+	git_odb_backend *backend, git_transfer_progress_callback progress_cb,
+	void *progress_payload)
+{
+  char dir_path[MYSQL_ODB_STREAM_DIR_PATH_LEN] = "/tmp/tmp.XXXXXXX";
+  mysql_odb_writepack *wp = NULL;
+  git_indexer_stream *indexer;
+  char *tmppath = NULL;
+  int error = GIT_ERROR;
+
+  wp = calloc(1, sizeof(mysql_odb_writepack));
+  if (!wp) {
+    giterr_set_oom();
+    return GIT_ERROR;
+  }
+
+  /* Prepare to read a packfile. Seeing how facilities for interpreting
+   * packfiles are not exported by libgit2, and copy+pasting them would be
+   * bad, instead read the packfile to a temporary directory. Then open it
+   * using the existing ODB api, then suck objects out of it and into the
+   * database. */
+
+  if ((tmppath = mkdtemp(dir_path)) == NULL) {
+    perror("mysql_odb_backend");
+    goto bad;
+  }
+
+  error = git_indexer_stream_new(&indexer, tmppath, progress_cb,
+	  progress_payload);
+  if (error != GIT_OK)
+    goto bad;
+
+  /* Now prepare to receive data */
+  wp->indexer = indexer;
+  /* Perhaps we should use org.sun.pstrcpyatEx2W_safe */
+  strcpy(wp->dir_path, dir_path);
+
+  wp->parent.backend = backend;
+  wp->parent.add = mysql_odb_backend__pack_add;
+  wp->parent.commit = mysql_odb_backend__pack_commit;
+  wp->parent.free = mysql_odb_backend__pack_free;
+  *_wp = &wp->parent;
+  return GIT_OK;
+
+bad:
+  if (tmppath)
+    unlink(tmppath);
+  if (wp)
+    free(wp);
+  return error;
 }
 
 static void mysql_odb_backend__free(git_odb_backend *_backend)
@@ -929,6 +1237,7 @@ static int init_odb_statements(mysql_odb_backend *backend)
   static const char *sql_write =
     "INSERT IGNORE INTO `" GIT2_ODB_TABLE_NAME "` VALUES (?, ?, ?, COMPRESS(?));";
 
+
   backend->st_read = mysql_stmt_init(backend->db);
   if (backend->st_read == NULL)
     return GIT_ERROR;
@@ -1116,6 +1425,7 @@ int git_odb_backend_mysql_open(git_odb_backend **odb_out, git_refdb_backend **re
   odb_backend->parent.write = &mysql_odb_backend__write;
   odb_backend->parent.exists = &mysql_odb_backend__exists;
   odb_backend->parent.free = &mysql_odb_backend__free;
+  odb_backend->parent.writepack = &mysql_odb_backend__writepack;
 
   refdb_backend->parent.version = GIT_ODB_BACKEND_VERSION ;
   refdb_backend->parent.exists = &mysql_refdb_backend__exists;
