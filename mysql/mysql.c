@@ -82,7 +82,9 @@ typedef struct {
   git_reference_iterator parent;
   mysql_refdb_backend *backend;
   char **refnames;
+  git_ref_t *types;
   git_oid *oids;
+  char **symnames;
   unsigned long numrows;
   unsigned long cur_pos;
 } mysql_refdb_iterator;
@@ -744,9 +746,11 @@ static int mysql_refdb_backend__lookup(git_reference **out,
         git_refdb_backend *_backend, const char *ref_name)
 {
   mysql_refdb_backend *backend;
+  void *refname_buffer = NULL;
   int error;
   MYSQL_BIND bind_buffers[1];
-  MYSQL_BIND result_buffers[2];
+  MYSQL_BIND result_buffers[3];
+  git_ref_t reftype;
 
   assert(out && _backend && ref_name && oid);
 
@@ -779,14 +783,26 @@ static int mysql_refdb_backend__lookup(git_reference **out,
   } else {
     unsigned char odb_buffer[GIT_OID_RAWSZ];
     git_oid oid;
+    size_t symref_len;
 
     assert(mysql_stmt_num_rows(backend->st_lookup) == 1);
-
-    result_buffers[0].buffer_type = MYSQL_TYPE_BLOB;
-    result_buffers[0].buffer = odb_buffer;
-    result_buffers[0].buffer_length = sizeof(odb_buffer);
-    result_buffers[0].length = &result_buffers[0].buffer_length;
     memset(odb_buffer, 0, sizeof(odb_buffer));
+
+    result_buffers[0].buffer_type = MYSQL_TYPE_SHORT;
+    result_buffers[0].buffer = &reftype;
+    result_buffers[0].buffer_length = sizeof(reftype);
+    result_buffers[0].length = &result_buffers[0].buffer_length;
+
+    result_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
+    result_buffers[1].buffer = odb_buffer;
+    result_buffers[1].buffer_length = sizeof(odb_buffer);
+    result_buffers[1].length = &result_buffers[1].buffer_length;
+
+    symref_len = 0;
+    result_buffers[2].buffer_type = MYSQL_TYPE_STRING;
+    result_buffers[2].buffer = NULL;
+    result_buffers[2].buffer_length = 0;
+    result_buffers[2].length = &symref_len;
 
     if(mysql_stmt_bind_result(backend->st_lookup, result_buffers) != 0)
       return GIT_ERROR;
@@ -794,10 +810,35 @@ static int mysql_refdb_backend__lookup(git_reference **out,
     if(mysql_stmt_fetch(backend->st_lookup) != 0)
       return GIT_ERROR;
 
+    /* If there's symbolic reference name data, load it manually */
+    if (symref_len > 0) {
+      refname_buffer = malloc(symref_len);
+      if (refname_buffer == NULL) {
+        giterr_set_oom();
+        error = GIT_ERROR;
+	goto out;
+      }
+
+      result_buffers[2].buffer = refname_buffer;
+      result_buffers[2].buffer_length = symref_len;
+
+      /* XXX memory leak */
+      if (mysql_stmt_fetch_column(backend->st_lookup, &result_buffers[2], 2, 0) != 0)
+        return GIT_ERROR;
+    }
+
     /* Having read the relevant oid, create an oid, then a reference */
     git_oid_fromraw(&oid, odb_buffer);
 
-    *out = git_reference__alloc(ref_name, &oid, NULL);
+    assert(reftype == GIT_REF_OID || reftype == GIT_REF_SYMBOLIC);
+    if (reftype == GIT_REF_OID) {
+      *out = git_reference__alloc(ref_name, &oid, NULL);
+    } else {
+      *out = git_reference__alloc_symbolic(ref_name, refname_buffer);
+    }
+
+    if (refname_buffer != NULL)
+      free(refname_buffer);
 
     if (*out == NULL)
       error = GIT_ERROR;
@@ -805,6 +846,7 @@ static int mysql_refdb_backend__lookup(git_reference **out,
       error = GIT_OK;
   }
 
+out:
   // reset the statement for further use
   if (mysql_stmt_reset(backend->st_lookup) != 0)
     return GIT_ERROR;
@@ -841,8 +883,15 @@ static int mysql_refdb_iterator_next(git_reference **ref,
   if (myit->cur_pos == myit->numrows)
     return GIT_ITEROVER;
 
-  *ref = git_reference__alloc(myit->refnames[myit->cur_pos],
-                &myit->oids[myit->cur_pos], NULL);
+  git_ref_t t = myit->types[myit->cur_pos];
+  assert(t == GIT_REF_OID || t == GIT_REF_SYMBOLIC);
+  if (t == GIT_REF_OID) {
+    *ref = git_reference__alloc(myit->refnames[myit->cur_pos],
+                  &myit->oids[myit->cur_pos], NULL);
+  } else {
+    *ref = git_reference__alloc_symbolic(myit->refnames[myit->cur_pos],
+                  myit->symnames[myit->cur_pos]);
+  }
 
   if (*ref == NULL) {
     giterr_set_oom();
@@ -880,8 +929,22 @@ static void mysql_refdb_iterator_free(git_reference_iterator *iter)
     free(myit->refnames);
   }
 
+  if (myit->types)
+    free(myit->types);
+
   if (myit->oids)
     free(myit->oids);
+
+  if (myit->symnames) {
+    unsigned int i;
+
+    for (i = 0; i < myit->numrows; i++)
+      if (myit->symnames[i])
+        free(myit->symnames[i]);
+
+    free(myit->symnames);
+  }
+
   free(myit);
 }
 
@@ -930,7 +993,7 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     myit->cur_pos = 0;
     myit->numrows = 0;
   } else {
-    MYSQL_BIND result_buffers[2];
+    MYSQL_BIND result_buffers[4];
     unsigned long refname_len, i;
 
     /* Allocate and initialize fields in myit to store the result rows from the
@@ -946,8 +1009,16 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     if (!myit->refnames)
       goto oom;
 
+    myit->types = malloc(sizeof(git_ref_t) * myit->numrows);
+    if (!myit->types)
+      goto oom;
+
     myit->oids = malloc(sizeof(git_oid) * myit->numrows);
     if (!myit->oids)
+      goto oom;
+
+    myit->symnames = calloc(1, sizeof(char *) * myit->numrows);
+    if (!myit->symnames)
       goto oom;
 
     /* Now proceed to iterate through each row, fetching data into the
@@ -957,16 +1028,30 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
     memset(result_buffers, 0, sizeof(result_buffers));
 
     for (i = 0; i < myit->numrows; i++) {
+      size_t sym_len;
+
       refname_len = 0;
       result_buffers[0].buffer_type = MYSQL_TYPE_STRING;
       result_buffers[0].buffer = NULL;
       result_buffers[0].buffer_length = 0;
       result_buffers[0].length = &refname_len;
 
-      result_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
-      result_buffers[1].buffer = &myit->oids[i];
-      result_buffers[1].buffer_length = GIT_OID_RAWSZ;
-      memset(result_buffers[1].buffer, 0, GIT_OID_RAWSZ);
+      result_buffers[1].buffer_type = MYSQL_TYPE_SHORT;
+      result_buffers[1].buffer = &myit->types[i];
+      result_buffers[1].buffer_length = sizeof(git_ref_t);
+      result_buffers[1].length = &result_buffers[1].buffer_length;
+
+      result_buffers[2].buffer_type = MYSQL_TYPE_BLOB;
+      result_buffers[2].buffer = &myit->oids[i];
+      result_buffers[2].buffer_length = GIT_OID_RAWSZ;
+      memset(result_buffers[2].buffer, 0, GIT_OID_RAWSZ);
+
+      /* Request len */
+      sym_len = 0;
+      result_buffers[3].buffer_type = MYSQL_TYPE_STRING;
+      result_buffers[3].buffer = NULL;
+      result_buffers[3].buffer_length = 0;
+      result_buffers[3].length = &sym_len;
 
       if (mysql_stmt_bind_result(myit->backend->st_iterate, result_buffers) != 0)
         goto error;
@@ -987,6 +1072,24 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
       result_buffers[0].buffer_length = refname_len;
 
       if (mysql_stmt_fetch_column(myit->backend->st_iterate, &result_buffers[0], 0, 0) != 0)
+        goto error;
+
+      /* If there's data in the symbolic refname, fetch it too; otherwise loop
+       * around again */
+      if (sym_len == 0)
+        continue;
+
+      if (sym_len >= ULONG_MAX - 1UL)
+        goto error;
+
+      myit->symnames[i] = malloc(sym_len + 1UL);
+      if (!myit->symnames[i])
+        goto oom;
+
+      result_buffers[3].buffer = myit->symnames[i];
+      result_buffers[3].buffer_length = sym_len;
+
+      if (mysql_stmt_fetch_column(myit->backend->st_iterate, &result_buffers[3], 3, 0) != 0)
         goto error;
     }
   }
@@ -1052,9 +1155,10 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   mysql_refdb_backend *backend;
   int error;
   int does_it_exist = 0;
-  MYSQL_BIND bind_buffers[2];
-  const char *refname;
+  MYSQL_BIND bind_buffers[4];
+  const char *refname, *symname;
   const git_oid *oid;
+  git_ref_t type;
 
   assert(_backend && ref);
 
@@ -1062,12 +1166,8 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   error = GIT_ERROR;
   refname = git_reference_name(ref);
   oid = git_reference_target(ref);
-
-  /* If oid is null, then it's a symbolic reference. These are not supported by
-   * this backend right now (perhaps won't be at all), so return an error.
-   * XXX diagnostics */
-  if (!oid)
-    return GIT_ERROR;
+  type = git_reference_type(ref);
+  symname = git_reference_symbolic_target(ref);
 
   /* Procedure: we have a reference to write, which may or may not already exist
    * in the database. Look it up to determine if it does. If it does, only
@@ -1100,11 +1200,24 @@ static int mysql_refdb_backend__write(git_refdb_backend *_backend,
   bind_buffers[0].length = &bind_buffers[0].buffer_length;
   bind_buffers[0].buffer_type = MYSQL_TYPE_STRING;
 
-  /* Bind the target OID in too */
-  bind_buffers[1].buffer = (void*)oid->id;;
-  bind_buffers[1].buffer_length = GIT_OID_RAWSZ ;
+  /* Reference type */
+  bind_buffers[1].buffer = &type;
+  bind_buffers[1].buffer_length = 1;
   bind_buffers[1].length = &bind_buffers[1].buffer_length;
-  bind_buffers[1].buffer_type = MYSQL_TYPE_BLOB;
+  bind_buffers[1].buffer_type = MYSQL_TYPE_SHORT;
+
+  /* Bind the target OID in too, if it exists */
+  bind_buffers[2].buffer = (oid) ? (void*)oid->id : NULL;
+  bind_buffers[2].buffer_length = GIT_OID_RAWSZ ;
+  bind_buffers[2].length = &bind_buffers[2].buffer_length;
+  bind_buffers[2].buffer_type = (oid) ? MYSQL_TYPE_BLOB : MYSQL_TYPE_NULL;
+
+  /* And possibly the symbolic name too */
+  bind_buffers[3].buffer = (void *)symname;
+  bind_buffers[3].buffer_length = GIT_OID_RAWSZ ;
+  bind_buffers[3].length = &bind_buffers[3].buffer_length;
+  bind_buffers[3].buffer_type = (symname) ? MYSQL_TYPE_BLOB : MYSQL_TYPE_NULL;
+
   if (mysql_stmt_bind_param(backend->st_write, bind_buffers) != 0)
     return GIT_ERROR;
 
@@ -1164,7 +1277,9 @@ static int create_table(MYSQL *db)
   static const char *sql_create_refdb =
     "CREATE TABLE `" GIT2_REFDB_TABLE_NAME "` ("
     "  `refname` text COLLATE utf8_bin NOT NULL, "
-    "  `oid` binary(20) NOT NULL, "
+    "  `type` smallint(2) unsigned NOT NULL,"
+    "  `oid` binary(20), "
+    "  `symref` TEXT COLLATE utf8_bin, "
     "  KEY `name` (`refname`(32)) "
     ") ENGINE=" GIT2_REFDB_STORAGE_ENGINE " DEFAULT CHARSET=utf8 COLLATE=utf8_bin;";
 
@@ -1290,16 +1405,16 @@ static int init_refdb_statements(mysql_refdb_backend *backend)
   my_bool truth = 1;
 
   static const char *sql_lookup =
-    "SELECT `oid` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
+    "SELECT `type`, `oid`, `symref` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
 
   static const char *sql_write =
-    "INSERT INTO `" GIT2_REFDB_TABLE_NAME "` VALUES (?, ?);";
+    "INSERT INTO `" GIT2_REFDB_TABLE_NAME "` VALUES (?, ?, ?, ?);";
 
   static const char *sql_delete =
     "DELETE FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` = ?;";
 
   static const char *sql_iterate =
-    "SELECT `refname`, `oid` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` LIKE REPLACE(REPLACE(?, '?', '_'), '*', '%');";
+    "SELECT `refname`, `type`, `oid`, `symref` FROM `" GIT2_REFDB_TABLE_NAME "` WHERE `refname` LIKE REPLACE(REPLACE(?, '?', '_'), '*', '%');";
 
   backend->st_lookup = mysql_stmt_init(backend->db);
   if (backend->st_lookup == NULL)
