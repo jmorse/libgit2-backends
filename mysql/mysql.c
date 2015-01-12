@@ -818,15 +818,14 @@ static int mysql_refdb_backend__lookup(git_reference **out,
 	goto out;
       }
 
-      /* Null terminate the string. Not sure if mysql does this already. */
-      refname_buffer[symref_len] = '\0';
-
       result_buffers[2].buffer = refname_buffer;
       result_buffers[2].buffer_length = symref_len;
 
       /* XXX memory leak */
       if (mysql_stmt_fetch_column(backend->st_lookup, &result_buffers[2], 2, 0) != 0)
         return GIT_ERROR;
+
+      refname_buffer[symref_len] = '\0';
     }
 
     /* Having read the relevant oid, create an oid, then a reference */
@@ -1070,14 +1069,13 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
       if (!myit->refnames[i])
         goto oom;
 
-      /* Null terminate the string. Not sure if mysql does this already. */
-      myit->refnames[i][refname_len] = '\0';
-
       result_buffers[0].buffer = myit->refnames[i];
       result_buffers[0].buffer_length = refname_len;
 
       if (mysql_stmt_fetch_column(myit->backend->st_iterate, &result_buffers[0], 0, 0) != 0)
         goto error;
+
+      myit->refnames[i][refname_len] = '\0';
 
       /* If there's data in the symbolic refname, fetch it too; otherwise loop
        * around again */
