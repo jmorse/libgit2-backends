@@ -989,6 +989,9 @@ static int mysql_refdb_backend__iterator(git_reference_iterator **iter,
   if (mysql_stmt_execute(myit->backend->st_iterate) != 0)
     goto error;
 
+  if (mysql_stmt_store_result(myit->backend->st_iterate) != 0)
+    return GIT_ERROR;
+
   if (mysql_stmt_num_rows(myit->backend->st_iterate) == 0) {
     /* Now rows -- indicated by iterator being over immediately (?) */
     myit->cur_pos = 0;
